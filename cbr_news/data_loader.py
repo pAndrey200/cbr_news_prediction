@@ -16,14 +16,97 @@ class CBRNewsDataLoader:
 
     def __init__(self, config):
         self.config = config
-        # Используем абсолютный путь к корню проекта
         try:
             project_root = Path(get_original_cwd())
         except (ValueError, AttributeError):
-            # Если Hydra не используется, используем текущую директорию
             project_root = Path.cwd()
         self.data_path = project_root / config.data.dataset_path
         self.parser = CBRDataParser(config)
+
+        self._setup_dvc_remote()
+
+    def _setup_dvc_remote(self):
+        """Настройка DVC remote из конфигурации для Yandex Object Storage"""
+        try:
+            dvc_config = self.config.data.dvc
+            if not dvc_config or not dvc_config.get('enabled', False):
+                return
+        except (AttributeError, KeyError):
+            return
+        
+        try:
+            from dvc.repo import Repo
+            
+            remote_config = dvc_config.remote
+            try:
+                project_root = Path(get_original_cwd())
+            except (ValueError, AttributeError):
+                project_root = Path.cwd()
+
+            dvc_dir = project_root / ".dvc"
+            if not dvc_dir.exists():
+                logger.info("DVC репозиторий не инициализирован, пропускаем настройку remote")
+                logger.info("Для использования DVC выполните: dvc init")
+                return
+
+            try:
+                dvc_repo = Repo(project_root)
+            except Exception as e:
+                if "not inside of a DVC repository" in str(e):
+                    logger.info("DVC репозиторий не найден, пропускаем настройку remote")
+                    logger.info("Для использования DVC выполните: dvc init")
+                    return
+                raise
+
+            remote_name = remote_config.get('name', 's3remote')
+            remote_url = remote_config.get('url')
+            
+            if remote_url:
+
+                import subprocess
+
+                try:
+
+                    subprocess.run([
+                        'dvc', 'remote', 'add', '-f', remote_name, remote_url
+                    ], check=True, capture_output=True, text=True)
+
+                    subprocess.run([
+                        'dvc', 'remote', 'default', remote_name
+                    ], check=True, capture_output=True, text=True)
+
+                    if remote_config.get('region_name'):
+                        subprocess.run([
+                            'dvc', 'remote', 'modify', remote_name, 'region', remote_config.get('region_name')
+                        ], check=True, capture_output=True, text=True)
+
+                    if remote_config.get('endpoint_url'):
+                        subprocess.run([
+                            'dvc', 'remote', 'modify', remote_name, 'endpointurl', remote_config.get('endpoint_url')
+                        ], check=True, capture_output=True, text=True)
+
+                    logger.info(f"DVC remote '{remote_name}' настроен для Yandex Object Storage: {remote_url}")
+                    logger.info(f"  Region: {remote_config.get('region_name')}")
+                    logger.info(f"  Endpoint: {remote_config.get('endpoint_url')}")
+
+                except subprocess.CalledProcessError as e:
+                    logger.warning(f"Не удалось настроить DVC remote через команды: {e}")
+                    logger.info("Попробуйте настроить remote вручную:")
+                    logger.info(f"  dvc remote add -f {remote_name} {remote_url}")
+                    logger.info(f"  dvc remote default {remote_name}")
+                    if remote_config.get('region_name'):
+                        logger.info(f"  dvc remote modify {remote_name} region {remote_config.get('region_name')}")
+                    if remote_config.get('endpoint_url'):
+                        logger.info(f"  dvc remote modify {remote_name} endpointurl {remote_config.get('endpoint_url')}")
+                
+        except ImportError:
+            logger.info("DVC не установлен, пропускаем настройку remote")
+        except Exception as e:
+            if "not inside of a DVC repository" in str(e):
+                logger.info("DVC репозиторий не найден, пропускаем настройку remote")
+                logger.info("Для использования DVC выполните: dvc init")
+            else:
+                logger.warning(f"Не удалось настроить DVC remote: {e}")
 
     def download_data(self, force_download: bool = False) -> pd.DataFrame:
         """Скачивание данных через DVC или парсинг"""
@@ -46,11 +129,14 @@ class CBRNewsDataLoader:
                 else:
                     logger.info("Файл не найден в DVC, переходим к сбору данных")
                     return self._collect_data_from_source()
-            except (FileNotFoundError, KeyError):
-                logger.info("Файл не найден в DVC, переходим к сбору данных")
+            except (FileNotFoundError, KeyError) as e:
+                logger.info(f"Файл не найден в DVC: {e}, переходим к сбору данных")
                 return self._collect_data_from_source()
+        except ImportError:
+            logger.info("DVC не установлен, переходим к сбору данных из исходных источников")
+            return self._collect_data_from_source()
         except Exception as e:
-            logger.info(f"DVC недоступен или файл не найден, переходим к сбору данных: {type(e).__name__}")
+            logger.info(f"DVC недоступен ({type(e).__name__}: {e}), переходим к сбору данных из исходных источников")
             return self._collect_data_from_source()
 
     def _load_local_data(self) -> pd.DataFrame:

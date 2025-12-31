@@ -7,8 +7,13 @@ data:
     delay_between_requests: 0.5
     max_press_releases: 1000
   dataset_path: "data/cbr_news.csv"
-  dvc_remote: "gdrive://your-google-drive-folder-id"
-
+  dvc:
+    enabled: true
+    remote:
+      name: "s3remote"
+      url: "s3://potseluevam/"
+      region_name: "ru-central1"
+      endpoint_url: "https://storage.yandexcloud.net/"
   max_length: 512
   batch_size: 16
   test_size: 0.2

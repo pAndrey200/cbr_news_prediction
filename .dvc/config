@@ -1,0 +1,6 @@
+[core]
+    remote = s3remote
+['remote "s3remote"']
+    url = s3://potseluevam/
+    region = ru-central1
+    endpointurl = https://storage.yandexcloud.net/
