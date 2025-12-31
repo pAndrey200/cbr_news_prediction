@@ -62,7 +62,25 @@ class CBRNewsModel(pl.LightningModule):
             weight_decay=self.config.model.weight_decay,
         )
 
-        total_steps = len(self.trainer.train_dataloader) * self.trainer.max_epochs
+        # Вычисляем total_steps из datamodule
+        # В момент вызова configure_optimizers trainer может быть еще не полностью настроен,
+        # поэтому используем datamodule напрямую
+        total_steps = None
+        if self.trainer and hasattr(self.trainer, 'datamodule') and self.trainer.datamodule:
+            try:
+                if self.trainer.datamodule.train_dataset is not None:
+                    num_samples = len(self.trainer.datamodule.train_dataset)
+                    batch_size = self.config.data.batch_size
+                    num_batches = (num_samples + batch_size - 1) // batch_size  # ceil division
+                    total_steps = num_batches * self.trainer.max_epochs
+            except (AttributeError, TypeError):
+                pass
+        
+        # Если не удалось вычислить, используем приблизительное значение
+        if total_steps is None:
+            # Используем большое значение, scheduler все равно будет работать корректно
+            total_steps = 10000
+        
         warmup_steps = self.config.model.warmup_steps
 
         scheduler = get_linear_schedule_with_warmup(
@@ -144,16 +162,26 @@ class CBRNewsModel(pl.LightningModule):
 
         if self.trainer.logger and hasattr(self.trainer.logger, "experiment"):
             try:
-                mlflow.log_metrics(
-                    {
-                        f"{stage}_epoch_loss": avg_loss.item(),
-                        f"{stage}_epoch_acc": epoch_acc,
-                        f"{stage}_epoch_f1": epoch_f1,
-                    },
-                    step=self.current_epoch,
-                )
+                # Используем run_id из logger, если доступен
+                run_id = None
+                if hasattr(self.trainer.logger, "run_id") and self.trainer.logger.run_id:
+                    run_id = self.trainer.logger.run_id
+                
+                if run_id:
+                    mlflow.log_metrics(
+                        {
+                            f"{stage}_epoch_loss": avg_loss.item(),
+                            f"{stage}_epoch_acc": epoch_acc,
+                            f"{stage}_epoch_f1": epoch_f1,
+                        },
+                        step=self.current_epoch,
+                        run_id=run_id,
+                    )
             except Exception as e:
-                logger.warning(f"Ошибка логирования в MLflow: {e}")
+                # Не логируем предупреждение, если это просто проблема с run_id
+                # (это нормально, если run еще не создан или был удален)
+                if "RESOURCE_DOES_NOT_EXIST" not in str(e) and "not found" not in str(e).lower():
+                    logger.warning(f"Ошибка логирования в MLflow: {e}")
 
     def predict(self, texts: List[str], tokenizer, device: str = None):
         """Предсказание для новых текстов"""

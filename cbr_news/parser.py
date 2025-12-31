@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 import pandas as pd
 from bs4 import BeautifulSoup
+from hydra.utils import get_original_cwd
 
 logger = logging.getLogger(__name__)
 
@@ -14,9 +15,15 @@ class CBRDataParser:
     """Парсер данных Банка России"""
 
     def __init__(self, config):
-    def __init__(self, config):
         self.config = config
-        self.data_dir = Path("data")
+        # Используем абсолютный путь к корню проекта, чтобы данные сохранялись
+        # в фиксированном месте, а не в outputs/
+        try:
+            project_root = Path(get_original_cwd())
+        except (ValueError, AttributeError):
+            # Если Hydra не используется, используем текущую директорию
+            project_root = Path.cwd()
+        self.data_dir = project_root / "data"
         self.data_dir.mkdir(exist_ok=True)
         locale.setlocale(locale.LC_ALL, "ru_RU.UTF-8")
         self.headers = {
@@ -295,6 +302,10 @@ class CBRDataParser:
 
         df_releases["month"] = df_releases["date_parsed"].apply(get_month)
 
+        # Переименовываем колонки перед merge, чтобы избежать конфликтов
+        df_usd = df_usd.rename(columns={"date": "date_usd"})
+        df_key_rates = df_key_rates.rename(columns={"date": "date_keyrate", "rate": "key_rate"})
+
         df_merged = pd.merge(
             df_releases,
             df_inflation,
@@ -304,23 +315,24 @@ class CBRDataParser:
         )
 
         df_merged = pd.merge(
-            df_merged, df_usd, left_on="date_parsed", right_on="date", how="left"
+            df_merged, df_usd, left_on="date_parsed", right_on="date_usd", how="left"
         )
 
         df_merged = pd.merge(
             df_merged,
             df_key_rates,
             left_on="date_parsed",
-            right_on="date_y",
+            right_on="date_keyrate",
             how="left",
         )
 
+        # Удаляем временные колонки дат и исходную колонку date (если есть)
+        # чтобы избежать дубликатов при переименовании date_parsed в date
+        df_merged = df_merged.drop(columns=["date_usd", "date_keyrate", "date"], errors="ignore")
+        
         df_merged = df_merged.rename(
             columns={
                 "date_parsed": "date",
-                "rate": "key_rate",
-                "date_x": "date_original",
-                "date_y": "date_rate",
             }
         )
 
@@ -337,8 +349,19 @@ class CBRDataParser:
             [col for col in columns_to_keep if col in df_merged.columns]
         ]
 
+        # Убеждаемся, что нет дубликатов колонки date
+        if df_merged.columns.duplicated().any():
+            df_merged = df_merged.loc[:, ~df_merged.columns.duplicated()]
+
         df_merged["usd"] = df_merged["usd"].ffill().bfill()
         df_merged["inflation"] = df_merged["inflation"].ffill().bfill()
+
+        # Проверяем, что колонка date существует и уникальна перед сортировкой
+        if "date" not in df_merged.columns:
+            raise ValueError("Колонка 'date' не найдена в DataFrame")
+        if df_merged.columns.tolist().count("date") > 1:
+            # Если все еще есть дубликаты, оставляем только первую
+            df_merged = df_merged.loc[:, ~df_merged.columns.duplicated()]
 
         df_merged = df_merged.sort_values("date")
         df_merged["rate_change"] = df_merged["key_rate"].diff()

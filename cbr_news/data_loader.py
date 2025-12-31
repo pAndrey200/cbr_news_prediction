@@ -4,6 +4,7 @@ from typing import Tuple
 
 import pandas as pd
 from dvc.api import DVCFileSystem
+from hydra.utils import get_original_cwd
 
 from cbr_news.parser import CBRDataParser
 
@@ -15,7 +16,13 @@ class CBRNewsDataLoader:
 
     def __init__(self, config):
         self.config = config
-        self.data_path = Path(config.data.dataset_path)
+        # Используем абсолютный путь к корню проекта
+        try:
+            project_root = Path(get_original_cwd())
+        except (ValueError, AttributeError):
+            # Если Hydra не используется, используем текущую директорию
+            project_root = Path.cwd()
+        self.data_path = project_root / config.data.dataset_path
         self.parser = CBRDataParser(config)
 
     def download_data(self, force_download: bool = False) -> pd.DataFrame:
@@ -26,13 +33,24 @@ class CBRNewsDataLoader:
             logger.info(f"Данные уже существуют: {self.data_path}")
             return self._load_local_data()
 
+        # Попытка загрузки через DVC
         try:
             logger.info("Попытка загрузки через DVC...")
             fs = DVCFileSystem()
-            fs.get(str(self.data_path), str(self.data_path))
-            return self._load_local_data()
+            # Проверяем, существует ли файл в DVC перед загрузкой
+            try:
+                if fs.exists(str(self.data_path)):
+                    fs.get(str(self.data_path), str(self.data_path))
+                    logger.info("Данные успешно загружены через DVC")
+                    return self._load_local_data()
+                else:
+                    logger.info("Файл не найден в DVC, переходим к сбору данных")
+                    return self._collect_data_from_source()
+            except (FileNotFoundError, KeyError):
+                logger.info("Файл не найден в DVC, переходим к сбору данных")
+                return self._collect_data_from_source()
         except Exception as e:
-            logger.warning(f"DVC загрузка не удалась: {e}")
+            logger.info(f"DVC недоступен или файл не найден, переходим к сбору данных: {type(e).__name__}")
             return self._collect_data_from_source()
 
     def _load_local_data(self) -> pd.DataFrame:

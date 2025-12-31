@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, List
 
+import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer
@@ -49,10 +50,11 @@ class CBRNewsDataset(Dataset):
         }
 
 
-class CBRNewsDataModule:
+class CBRNewsDataModule(pl.LightningDataModule):
     """DataModule для PyTorch Lightning"""
 
     def __init__(self, config):
+        super().__init__()
         self.config = config
         self.train_dataset = None
         self.val_dataset = None

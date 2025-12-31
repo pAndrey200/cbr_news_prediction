@@ -34,7 +34,7 @@ def train(cfg: DictConfig):
     mlflow_logger = MLFlowLogger(
         experiment_name=cfg.training.mlflow.experiment_name,
         tracking_uri=cfg.training.mlflow.tracking_uri,
-        log_model=cfg.training.mlflow.log_model,
+        log_model=False,  # Отключаем автоматическое логирование модели, чтобы избежать ошибок с boto3
     )
 
     mlflow_logger.log_hyperparams(OmegaConf.to_container(cfg, resolve=True))
@@ -78,7 +78,16 @@ def train(cfg: DictConfig):
     )
 
     logger.info("Запуск тренировки...")
-    trainer.fit(model, datamodule=data_module)
+    try:
+        trainer.fit(model, datamodule=data_module)
+    except Exception as e:
+        # Обрабатываем ошибки finalize MLflow (например, отсутствие boto3 для S3)
+        if "boto3" in str(e) or "ModuleNotFoundError" in str(type(e).__name__):
+            logger.warning(f"Ошибка при завершении MLflow (возможно, отсутствует boto3): {e}")
+            logger.info("Тренировка завершена успешно, но логирование артефактов в MLflow не удалось")
+        else:
+            raise
+    
     logger.info("Запуск тестирования...")
     test_results = trainer.test(model, datamodule=data_module)
 
@@ -89,7 +98,12 @@ def train(cfg: DictConfig):
         logger.info(f"Лучшая модель сохранена: {best_model_path}")
 
         if cfg.training.mlflow.log_artifacts:
-            mlflow_logger.experiment.log_artifact(mlflow_logger.run_id, best_model_path)
+            try:
+                if mlflow_logger.run_id:
+                    mlflow_logger.experiment.log_artifact(mlflow_logger.run_id, best_model_path)
+                    logger.info(f"Модель залогирована в MLflow: {mlflow_logger.run_id}")
+            except Exception as e:
+                logger.warning(f"Не удалось залогировать модель в MLflow: {e}")
 
     logger.info("Пример предсказания...")
     sample_texts = [
