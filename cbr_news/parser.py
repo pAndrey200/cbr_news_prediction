@@ -1,13 +1,9 @@
 import locale
 import logging
 import time
-import warnings
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 
 import httpx
-import numpy as np
 import pandas as pd
 from bs4 import BeautifulSoup
 
@@ -18,14 +14,20 @@ class CBRDataParser:
     """Парсер данных Банка России"""
 
     def __init__(self, config):
+    def __init__(self, config):
         self.config = config
         self.data_dir = Path("data")
         self.data_dir.mkdir(exist_ok=True)
         locale.setlocale(locale.LC_ALL, "ru_RU.UTF-8")
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
 
     def get_press_releases(self) -> pd.DataFrame:
         """Получение пресс-релизов Банка России"""
-        URL = "http://www.cbr.ru/Crosscut/NewsList/LoadMore/84035?intOffset=0&extOffset="
+        URL = (
+            "http://www.cbr.ru/Crosscut/NewsList/LoadMore/84035?intOffset=0&extOffset="
+        )
         offset = 0
         data = []
 
@@ -115,7 +117,7 @@ class CBRDataParser:
         df = pd.DataFrame(data, columns=["date", "link", "title", "release"])
 
         raw_path = self.data_dir / "raw-cbr-press-releases.csv"
-        df.to_csv(raw_path, index=False, encoding='utf-8')
+        df.to_csv(raw_path, index=False, encoding="utf-8")
         logger.info(f"Сохранено {len(df)} релизов в {raw_path}")
 
         return df
@@ -124,40 +126,39 @@ class CBRDataParser:
         """Получение исторических данных по ключевой ставке (упрощенный вариант)"""
         logger.info("Получение данных по ключевой ставке...")
 
-        try:
-            base_url = "https://cbr.ru/hd_base/KeyRate"
-            response = httpx.get(base_url, headers=self.headers, timeout=10)
+        base_url = "https://cbr.ru/hd_base/KeyRate"
+        response = httpx.get(base_url, headers=self.headers, timeout=10)
 
-            soup = BeautifulSoup(response.text, "html.parser")
-            scripts = soup.find_all("script")
+        soup = BeautifulSoup(response.text, "html.parser")
+        scripts = soup.find_all("script")
 
-            target_script = None
-            for script in scripts:
-                if script.string and '"data":[' in script.string:
-                    target_script = script.string
-                    break
+        target_script = None
+        for script in scripts:
+            if script.string and '"data":[' in script.string:
+                target_script = script.string
+                break
 
-            script_str = target_script
+        script_str = target_script
 
-            dates_str = script_str.split(',"categories":["')[1].split("]")[0]
-            values_str = script_str.split(',"data":[')[1].split("]")[0]
+        dates_str = script_str.split(',"categories":["')[1].split("]")[0]
+        values_str = script_str.split(',"data":[')[1].split("]")[0]
 
-            dates_array = [s.strip('"') for s in dates_str.split(",")]
-            values_array = [float(s) for s in values_str.split(",")]
+        dates_array = [s.strip('"') for s in dates_str.split(",")]
+        values_array = [float(s) for s in values_str.split(",")]
 
-            if len(dates_array) != len(values_array):
-                min_len = min(len(dates_array), len(values_array))
-                dates_array = dates_array[:min_len]
-                values_array = values_array[:min_len]
-                logger.warning(f"Длины не совпадают, обрезано до {min_len}")
+        if len(dates_array) != len(values_array):
+            min_len = min(len(dates_array), len(values_array))
+            dates_array = dates_array[:min_len]
+            values_array = values_array[:min_len]
+            logger.warning(f"Длины не совпадают, обрезано до {min_len}")
 
-            df = pd.DataFrame({"date": dates_array, "rate": values_array})
+        df = pd.DataFrame({"date": dates_array, "rate": values_array})
 
-            key_rate_path = self.data_dir / "key-rates-cbr.csv"
-            df.to_csv(key_rate_path, index=False)
-            logger.info(f"Сохранено {len(df)} записей по ключевой ставке")
+        key_rate_path = self.data_dir / "key-rates-cbr.csv"
+        df.to_csv(key_rate_path, index=False)
+        logger.info(f"Сохранено {len(df)} записей по ключевой ставке")
 
-            return df
+        return df
 
     def get_inflation(self) -> pd.DataFrame:
         """Получение данных по инфляции (упрощенный вариант)"""
@@ -220,7 +221,6 @@ class CBRDataParser:
             cols = row.find_all("td")
             cols = [c.text.strip() for c in cols]
             if len(cols) == 3:
-
                 date_str = cols[0]
                 rate_str = cols[2].replace(",", ".")
 
@@ -244,45 +244,51 @@ class CBRDataParser:
 
         def parse_date(date_str):
             try:
-
                 parts = date_str.split()
                 day = parts[0]
                 month_ru = parts[1].lower()[:3]
                 year = parts[2]
 
                 months = {
-                    'янв': '01', 'фев': '02', 'мар': '03', 'апр': '04',
-                    'мая': '05', 'май': '05', 'июн': '06', 'июл': '07',
-                    'авг': '08', 'сен': '09', 'окт': '10', 'ноя': '11', 'дек': '12'
+                    "янв": "01",
+                    "фев": "02",
+                    "мар": "03",
+                    "апр": "04",
+                    "мая": "05",
+                    "май": "05",
+                    "июн": "06",
+                    "июл": "07",
+                    "авг": "08",
+                    "сен": "09",
+                    "окт": "10",
+                    "ноя": "11",
+                    "дек": "12",
                 }
 
-                month = months.get(month_ru, '01')
+                month = months.get(month_ru, "01")
                 return f"{day}.{month}.{year}"
             except:
                 return None
 
-        df_releases['date_parsed'] = df_releases['date'].apply(parse_date)
-        df_releases = df_releases.dropna(subset=['date_parsed'])
+        df_releases["date_parsed"] = df_releases["date"].apply(parse_date)
+        df_releases = df_releases.dropna(subset=["date_parsed"])
 
         df_key_rates = pd.read_csv(
-            self.data_dir / "key-rates-cbr.csv",
-            dtype={"date": str, "rate": float}
+            self.data_dir / "key-rates-cbr.csv", dtype={"date": str, "rate": float}
         )
 
         df_usd = pd.read_csv(
-            self.data_dir / "cur-usd-cbr.csv",
-            dtype={"date": str, "usd": float}
+            self.data_dir / "cur-usd-cbr.csv", dtype={"date": str, "usd": float}
         )
 
         df_inflation = pd.read_csv(
             self.data_dir / "inflation-cbr.csv",
-            dtype={"date_inflation": str, "inflation": float}
+            dtype={"date_inflation": str, "inflation": float},
         )
 
         def get_month(date_str):
             try:
-
-                parts = date_str.split('.')
+                parts = date_str.split(".")
                 return f"{parts[1]}.{parts[2]}"
             except:
                 return ""
@@ -294,15 +300,11 @@ class CBRDataParser:
             df_inflation,
             left_on="month",
             right_on="date_inflation",
-            how="left"
+            how="left",
         )
 
         df_merged = pd.merge(
-            df_merged,
-            df_usd,
-            left_on="date_parsed",
-            right_on="date",
-            how="left"
+            df_merged, df_usd, left_on="date_parsed", right_on="date", how="left"
         )
 
         df_merged = pd.merge(
@@ -310,39 +312,51 @@ class CBRDataParser:
             df_key_rates,
             left_on="date_parsed",
             right_on="date_y",
-            how="left"
+            how="left",
         )
 
-        df_merged = df_merged.rename(columns={
-            "date_parsed": "date",
-            "rate": "key_rate",
-            "date_x": "date_original",
-            "date_y": "date_rate"
-        })
+        df_merged = df_merged.rename(
+            columns={
+                "date_parsed": "date",
+                "rate": "key_rate",
+                "date_x": "date_original",
+                "date_y": "date_rate",
+            }
+        )
 
-        columns_to_keep = ['date', 'link', 'title', 'release', 'inflation', 'usd', 'key_rate']
-        df_merged = df_merged[[col for col in columns_to_keep if col in df_merged.columns]]
+        columns_to_keep = [
+            "date",
+            "link",
+            "title",
+            "release",
+            "inflation",
+            "usd",
+            "key_rate",
+        ]
+        df_merged = df_merged[
+            [col for col in columns_to_keep if col in df_merged.columns]
+        ]
 
-        df_merged['usd'] = df_merged['usd'].ffill().bfill()
-        df_merged['inflation'] = df_merged['inflation'].ffill().bfill()
+        df_merged["usd"] = df_merged["usd"].ffill().bfill()
+        df_merged["inflation"] = df_merged["inflation"].ffill().bfill()
 
-        df_merged = df_merged.sort_values('date')
-        df_merged['rate_change'] = df_merged['key_rate'].diff()
+        df_merged = df_merged.sort_values("date")
+        df_merged["rate_change"] = df_merged["key_rate"].diff()
 
         # Определение категории
         def get_category(change):
             if pd.isna(change):
-                return 'same'
+                return "same"
             elif change < -0.1:
-                return 'down'
+                return "down"
             elif change > 0.1:
-                return 'up'
+                return "up"
             else:
-                return 'same'
+                return "same"
 
-        df_merged['target'] = df_merged['rate_change'].apply(get_category)
+        df_merged["target"] = df_merged["rate_change"].apply(get_category)
 
-        df_merged = df_merged.dropna(subset=['release', 'target'])
+        df_merged = df_merged.dropna(subset=["release", "target"])
 
         processed_path = self.data_dir / "cbr-press-releases.csv"
         df_merged.to_csv(processed_path, index=False)
@@ -370,21 +384,23 @@ class CBRDataParser:
         logger.info("5. Предобработка данных...")
         df_processed = self.preprocess_data(df_releases)
 
-        if 'release' in df_processed.columns and 'target' in df_processed.columns:
-            final_df = df_processed[['release', 'target']].copy()
-            final_df = final_df.rename(columns={'release': 'text', 'target': 'label'})
+        if "release" in df_processed.columns and "target" in df_processed.columns:
+            final_df = df_processed[["release", "target"]].copy()
+            final_df = final_df.rename(columns={"release": "text", "target": "label"})
 
-            final_df['cleaned_text'] = final_df['text'].apply(
-                lambda x: ' '.join(str(x).split()).lower().strip()
+            final_df["cleaned_text"] = final_df["text"].apply(
+                lambda x: " ".join(str(x).split()).lower().strip()
             )
 
-            final_df = final_df[final_df['cleaned_text'].str.len() > 50]
+            final_df = final_df[final_df["cleaned_text"].str.len() > 50]
 
             dataset_path = self.data_dir / "cbr_dataset.csv"
-            final_df[['cleaned_text', 'label']].to_csv(dataset_path, index=False)
+            final_df[["cleaned_text", "label"]].to_csv(dataset_path, index=False)
 
             logger.info(f"Финальный датасет: {len(final_df)} записей")
-            logger.info(f"Распределение меток: {final_df['label'].value_counts().to_dict()}")
+            logger.info(
+                f"Распределение меток: {final_df['label'].value_counts().to_dict()}"
+            )
 
             return final_df
         else:
