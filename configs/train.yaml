@@ -1,0 +1,22 @@
+defaults:
+  - _self_
+
+training:
+  max_epochs: 10
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+
+  monitor: "val_loss"
+  mode: "min"
+
+  log_every_n_steps: 50
+  val_check_interval: 1.0
+
+  optimizer: "adamw"
+  scheduler: "linear"
+
+  mlflow:
+    tracking_uri: "http://127.0.0.1:8080"
+    experiment_name: "cbr_news"
+    log_artifacts: true
+    log_model: true

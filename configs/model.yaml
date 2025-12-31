@@ -1,0 +1,14 @@
+defaults:
+  - _self_
+
+model:
+  backbone: "cointegrated/rubert-tiny2"
+  num_classes: 3
+  dropout: 0.1
+
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_steps: 100
+
+  freeze_backbone: false
+  num_frozen_layers: 0

@@ -1,0 +1,17 @@
+defaults:
+  - data: default
+  - model: default
+  - train: default
+  - _self_
+
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+
+seed: 42
+project_name: "cbr_news_prediction"

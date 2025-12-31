@@ -1,0 +1,85 @@
+# Создайте .gitignore если его нет
+cat > .gitignore << 'EOF'
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+pythonenv*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+data/
+outputs/
+checkpoints/
+mlruns/
+*.pth
+*.pt
+*.h5
+*.pkl
+*.joblib
+logs/
+*.log
+
+# DVC
+.dvc/tmp
+.dvc/cache
+
+# MLflow
+mlflow/
+mlruns/
+
+# Test
+.coverage
+.tox/
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints
+
+# Poetry
+poetry.lock
+EOF
