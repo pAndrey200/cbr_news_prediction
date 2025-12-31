@@ -1,5 +1,3 @@
-# Создайте .gitignore если его нет
-cat > .gitignore << 'EOF'
 # Python
 __pycache__/
 *.py[cod]
@@ -82,4 +80,3 @@ htmlcov/
 
 # Poetry
 poetry.lock
-EOF
