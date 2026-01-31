@@ -1,3 +1,4 @@
+import json
 import locale
 import logging
 import time
@@ -129,6 +130,152 @@ class CBRDataParser:
 
         return df
 
+    def get_news_events(self) -> pd.DataFrame:
+        """Получение новостей типа events с сайта Банка России"""
+        base_url = "https://www.cbr.ru/news/eventandpress/"
+        page = 0
+        all_events = []
+        
+        logger.info("Начало парсинга новостей типа events Банка России...")
+        
+        while True:
+            try:
+                params = {
+                    "page": page,
+                    "IsEng": "false",
+                    "type": "100",
+                    "dateFrom": "",
+                    "dateTo": "",
+                    "Tid": "",
+                    "vol": "",
+                    "phrase": ""
+                }
+                
+                response = httpx.get(base_url, params=params, headers=self.headers, timeout=30)
+                
+                if response.status_code != 200:
+                    logger.warning(f"Ошибка HTTP {response.status_code} на странице {page}")
+                    break
+                
+                try:
+                    events_data = response.json()
+                except json.JSONDecodeError:
+                    logger.warning(f"Не удалось распарсить JSON на странице {page}")
+                    break
+                
+                if not events_data or len(events_data) == 0:
+                    logger.info(f"Больше данных нет на странице {page}, завершение парсинга...")
+                    break
+                
+                # Фильтруем только события типа "events"
+                events_on_page = [event for event in events_data if event.get("TBLType") == "events"]
+                
+                if events_on_page:
+                    all_events.extend(events_on_page)
+                    logger.info(f"Получено {len(events_on_page)} событий со страницы {page} (всего: {len(all_events)})")
+                else:
+                    logger.info(f"Не найдено событий типа 'events' на странице {page}")
+                
+                # Если на странице вообще нет данных, прекращаем парсинг
+                # Если есть данные, но нет событий типа "events", продолжаем
+                if len(events_data) == 0:
+                    logger.info(f"Больше данных нет на странице {page}, завершение парсинга...")
+                    break
+                
+                page += 1
+                time.sleep(1)
+                
+            except httpx.TimeoutException:
+                logger.warning(f"Таймаут при page={page}, повторная попытка...")
+                time.sleep(5)
+                continue
+            except Exception as e:
+                logger.error(f"Ошибка при парсинге страницы {page}: {e}")
+                break
+        
+        logger.info(f"Всего получено {len(all_events)} событий. Начало получения текстов новостей...")
+        
+        data = []
+        for i, event in enumerate(all_events):
+            try:
+                doc_htm = event.get("doc_htm")
+                if not doc_htm:
+                    logger.warning(f"Пропущено событие {i+1}: отсутствует doc_htm")
+                    continue
+                
+                # Формируем ссылку на полный текст новости
+                news_url = f"https://www.cbr.ru/press/event/?id={doc_htm}"
+                
+                # Получаем дату из поля DT
+                date_str = event.get("DT", "")
+                if date_str:
+                    # Преобразуем формат даты из ISO в формат с русскими месяцами
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                        # Русские названия месяцев
+                        months_ru = {
+                            1: "янв", 2: "фев", 3: "мар", 4: "апр", 5: "мая",
+                            6: "июн", 7: "июл", 8: "авг", 9: "сен", 10: "окт",
+                            11: "ноя", 12: "дек"
+                        }
+                        month_ru = months_ru.get(dt.month, "янв")
+                        date_str = f"{dt.day} {month_ru} {dt.year}"
+                    except:
+                        pass
+                
+                # Получаем заголовок
+                title = event.get("name_doc", "")
+                
+                # Получаем полный текст новости
+                try:
+                    response = httpx.get(news_url, headers=self.headers, timeout=30)
+                    tree = BeautifulSoup(response.text, "html.parser")
+                    
+                    # Ищем основной контент новости
+                    # Пробуем разные селекторы, которые могут содержать текст
+                    content = None
+                    for selector in [".landing-text", ".news-content", "article", ".content"]:
+                        content = tree.select_one(selector)
+                        if content:
+                            break
+                    
+                    if not content:
+                        # Если не нашли по селекторам, ищем основной контент в body
+                        content = tree.find("main") or tree.find("article") or tree.find("div", class_=lambda x: x and "content" in x.lower())
+                    
+                    if content:
+                        # Удаление скриптов и стилей
+                        for script in content.find_all(["script", "style"]):
+                            script.decompose()
+                        
+                        # Получение чистого текста
+                        text = content.get_text(separator=" ", strip=True)
+                    else:
+                        text = ""
+                        logger.warning(f"Не удалось найти контент для новости {doc_htm}")
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при получении текста новости {news_url}: {e}")
+                    text = ""
+                
+                data.append([date_str, news_url, title, text])
+                logger.info(f"Получен текст новости {i+1}/{len(all_events)}: {title[:50]}...")
+                
+            except Exception as e:
+                logger.error(f"Ошибка при обработке события {i+1}: {e}")
+                continue
+            
+            time.sleep(0.5)
+        
+        df = pd.DataFrame(data, columns=["date", "link", "title", "release"])
+        
+        raw_path = self.data_dir / "raw-cbr-news.csv"
+        df.to_csv(raw_path, index=False, encoding="utf-8")
+        logger.info(f"Сохранено {len(df)} новостей в {raw_path}")
+        
+        return df
+
     def get_key_rate(self) -> pd.DataFrame:
         """Получение исторических данных по ключевой ставке (упрощенный вариант)"""
         logger.info("Получение данных по ключевой ставке...")
@@ -251,31 +398,48 @@ class CBRDataParser:
 
         def parse_date(date_str):
             try:
+                # Если дата уже в формате DD.MM.YYYY, возвращаем как есть
+                if "." in date_str and len(date_str.split(".")) == 3:
+                    parts = date_str.split(".")
+                    if len(parts[0]) <= 2 and len(parts[1]) <= 2 and len(parts[2]) == 4:
+                        return date_str
+                
+                # Если дата в ISO формате (YYYY-MM-DD или YYYY-MM-DDTHH:MM:SS)
+                if "T" in date_str or (len(date_str) >= 10 and date_str[4] == "-" and date_str[7] == "-"):
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                        return f"{dt.day:02d}.{dt.month:02d}.{dt.year}"
+                    except:
+                        pass
+                
+                # Парсим формат "DD MMM YYYY" (русский или английский)
                 parts = date_str.split()
-                day = parts[0]
-                month_ru = parts[1].lower()[:3]
-                year = parts[2]
+                if len(parts) >= 3:
+                    day = parts[0]
+                    month_ru = parts[1].lower()[:3]
+                    year = parts[2]
 
-                months = {
-                    "янв": "01",
-                    "фев": "02",
-                    "мар": "03",
-                    "апр": "04",
-                    "мая": "05",
-                    "май": "05",
-                    "июн": "06",
-                    "июл": "07",
-                    "авг": "08",
-                    "сен": "09",
-                    "окт": "10",
-                    "ноя": "11",
-                    "дек": "12",
-                }
+                    months = {
+                        "янв": "01", "jan": "01",
+                        "фев": "02", "feb": "02",
+                        "мар": "03", "mar": "03",
+                        "апр": "04", "apr": "04",
+                        "мая": "05", "май": "05", "may": "05",
+                        "июн": "06", "jun": "06",
+                        "июл": "07", "jul": "07",
+                        "авг": "08", "aug": "08",
+                        "сен": "09", "sep": "09",
+                        "окт": "10", "oct": "10",
+                        "ноя": "11", "nov": "11",
+                        "дек": "12", "dec": "12",
+                    }
 
-                month = months.get(month_ru, "01")
-                return f"{day}.{month}.{year}"
+                    month = months.get(month_ru, "01")
+                    return f"{day}.{month}.{year}"
             except:
-                return None
+                pass
+            return None
 
         df_releases["date_parsed"] = df_releases["date"].apply(parse_date)
         df_releases = df_releases.dropna(subset=["date_parsed"])
@@ -395,17 +559,25 @@ class CBRDataParser:
         logger.info("1. Получение пресс-релизов...")
         df_releases = self.get_press_releases()
 
-        logger.info("2. Получение ключевой ставки...")
+        logger.info("2. Получение новостей типа events...")
+        df_news = self.get_news_events()
+
+        logger.info("3. Объединение пресс-релизов и новостей...")
+        # Объединяем пресс-релизы и новости
+        df_all_releases = pd.concat([df_releases, df_news], ignore_index=True)
+        logger.info(f"Всего получено {len(df_all_releases)} документов ({len(df_releases)} пресс-релизов + {len(df_news)} новостей)")
+
+        logger.info("4. Получение ключевой ставки...")
         df_key_rates = self.get_key_rate()
 
-        logger.info("3. Получение инфляции...")
+        logger.info("5. Получение инфляции...")
         df_inflation = self.get_inflation()
 
-        logger.info("4. Получение курса USD...")
+        logger.info("6. Получение курса USD...")
         df_usd = self.get_usd_rate()
 
-        logger.info("5. Предобработка данных...")
-        df_processed = self.preprocess_data(df_releases)
+        logger.info("7. Предобработка данных...")
+        df_processed = self.preprocess_data(df_all_releases)
 
         if "release" in df_processed.columns and "target" in df_processed.columns:
             final_df = df_processed[["release", "target"]].copy()
