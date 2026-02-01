@@ -1,7 +1,6 @@
 import logging
 from typing import List
 
-import mlflow
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
@@ -62,9 +61,6 @@ class CBRNewsModel(pl.LightningModule):
             weight_decay=self.config.model.weight_decay,
         )
 
-        # Вычисляем total_steps из datamodule
-        # В момент вызова configure_optimizers trainer может быть еще не полностью настроен,
-        # поэтому используем datamodule напрямую
         total_steps = None
         if self.trainer and hasattr(self.trainer, 'datamodule') and self.trainer.datamodule:
             try:
@@ -76,9 +72,7 @@ class CBRNewsModel(pl.LightningModule):
             except (AttributeError, TypeError):
                 pass
         
-        # Если не удалось вычислить, используем приблизительное значение
         if total_steps is None:
-            # Используем большое значение, scheduler все равно будет работать корректно
             total_steps = 10000
         
         warmup_steps = self.config.model.warmup_steps
@@ -162,7 +156,7 @@ class CBRNewsModel(pl.LightningModule):
 
         if self.trainer.logger and hasattr(self.trainer.logger, "experiment"):
             try:
-                # Используем run_id из logger, если доступен
+                import mlflow
                 run_id = None
                 if hasattr(self.trainer.logger, "run_id") and self.trainer.logger.run_id:
                     run_id = self.trainer.logger.run_id
@@ -178,8 +172,6 @@ class CBRNewsModel(pl.LightningModule):
                         run_id=run_id,
                     )
             except Exception as e:
-                # Не логируем предупреждение, если это просто проблема с run_id
-                # (это нормально, если run еще не создан или был удален)
                 if "RESOURCE_DOES_NOT_EXIST" not in str(e) and "not found" not in str(e).lower():
                     logger.warning(f"Ошибка логирования в MLflow: {e}")
 
@@ -190,7 +182,6 @@ class CBRNewsModel(pl.LightningModule):
 
         self.eval()
 
-        # Токенизация
         encodings = tokenizer(
             texts,
             truncation=True,
