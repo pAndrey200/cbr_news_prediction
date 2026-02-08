@@ -229,3 +229,69 @@ class CBRNewsDataLoader:
         text = re.sub(r"[^\w\s.,!?%\-]", "", text)
 
         return text
+
+    def download_multitask_data(self, force_download: bool = False) -> pd.DataFrame:
+        """Загрузка multi-task данных"""
+        logger.info("Загрузка multi-task данных...")
+
+        try:
+            project_root = Path(get_original_cwd())
+        except (ValueError, AttributeError):
+            project_root = Path.cwd()
+
+        multitask_path = project_root / "data" / "cbr_multitask_dataset.csv"
+
+        if multitask_path.exists() and not force_download:
+            logger.info(f"Multi-task данные уже существуют: {multitask_path}")
+            df = pd.read_csv(multitask_path)
+            logger.info(f"Загружено {len(df)} записей")
+            return df
+
+        # Если файла нет, создаем его
+        logger.info("Multi-task датасет не найден, создаем...")
+        df_processed = self.parser.collect_all_data()
+
+        # Создаем multi-task датасет
+        df_multitask = self.parser.prepare_multitask_dataset(df_processed=None)
+
+        return df_multitask
+
+    def split_by_time_multitask(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Разделение multi-task данных по времени"""
+
+        def extract_year(date_str):
+            try:
+                # Формат: DD.MM.YYYY
+                parts = str(date_str).split(".")
+                if len(parts) == 3:
+                    year = int(parts[2])
+                    if 2010 <= year <= 2025:
+                        return year
+            except:
+                pass
+            return 2020
+
+        df["year"] = df["date"].apply(extract_year)
+
+        train_years = self.config.data.train_years
+        test_years = self.config.data.test_years
+
+        train_df = df[df["year"].isin(train_years)]
+        test_df = df[df["year"].isin(test_years)]
+
+        if train_df.empty or test_df.empty:
+            logger.warning(
+                "Не удалось разделить по годам, используется случайное разделение"
+            )
+            from sklearn.model_selection import train_test_split
+
+            train_df, test_df = train_test_split(
+                df,
+                test_size=self.config.data.test_size,
+                random_state=self.config.seed,
+            )
+
+        logger.info(f"Multi-task Train: {len(train_df)} записей")
+        logger.info(f"Multi-task Test: {len(test_df)} записей")
+
+        return train_df, test_df
