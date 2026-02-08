@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: cbr-postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-cbr_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-cbr_password}
+      - POSTGRES_DB=${POSTGRES_DB:-cbr_news}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cbr_user}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build: .
+    container_name: cbr-api
+    ports:
+      - "8000:8000"
+    environment:
+      - CHECKPOINT_PATH=/app/outputs
+      - CONFIG_PATH=/app/configs/config.yaml
+      - USE_DATABASE=true
+      - POSTGRES_USER=${POSTGRES_USER:-cbr_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-cbr_password}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-cbr_news}
+    volumes:
+      - ./outputs:/app/outputs:ro
+      - ./checkpoints:/app/checkpoints:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  bot:
+    build: .
+    container_name: cbr-bot
+    command: ["python", "-m", "bot.main"]
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - API_URL=http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
