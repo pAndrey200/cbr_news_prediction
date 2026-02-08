@@ -1,0 +1,25 @@
+defaults:
+  - _self_
+
+model:
+  backbone: "DeepPavlov/rubert-base-cased"
+  num_classes: 3  # up, down, same для ключевой ставки
+  dropout: 0.1
+
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_steps: 100
+
+  freeze_backbone: false
+  num_frozen_layers: 0
+
+  # Multi-task специфичные параметры
+  # Временно используем только те задачи, для которых есть данные
+  # После пересборки cbr-press-releases.csv можно добавить: eur, cny, ruonia
+  auxiliary_tasks:
+    - usd
+    - inflation
+
+  # Веса для loss функций
+  auxiliary_weight: 0.3  # вес для auxiliary tasks
+  main_weight: 1.0       # вес для главной задачи (ключевая ставка)

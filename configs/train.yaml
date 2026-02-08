@@ -5,6 +5,9 @@ training:
   max_epochs: 10
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
+  
+  accelerator: "auto"
+  devices: 1 
 
   monitor: "val_loss"
   mode: "min"
