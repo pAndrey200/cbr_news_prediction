@@ -143,11 +143,12 @@ def startup():
         )
         predictor = None
         return
-    config_path = os.environ.get("CONFIG_PATH") or str(_project_root / "configs" / "config.yaml")
+    config_path = os.environ.get("CONFIG_PATH") or str(_project_root / "configs" / "multitask_config.yaml")
     try:
         predictor = CBRNewsPredictor(
             checkpoint_path=checkpoint,
             config_path=config_path if Path(config_path).exists() else None,
+            multitask=True,
         )
         logger.info("Модель загружена успешно")
     except Exception as e:
