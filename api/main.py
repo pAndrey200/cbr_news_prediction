@@ -12,9 +12,10 @@ import sys
 _project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_project_root))
 
-from cbr_news.database import get_db, init_db
+from cbr_news.database import get_db, init_db, async_init_db
 from cbr_news.inference import CBRNewsPredictor
 from cbr_news.repository import NewsRepository
+from api.tasks_router import router as tasks_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,6 +25,8 @@ app = FastAPI(
     description="Предсказание направления изменения ключевой ставки по новостям Банка России",
     version="0.1.0",
 )
+
+app.include_router(tasks_router)
 
 predictor: CBRNewsPredictor | None = None
 USE_DATABASE = os.environ.get("USE_DATABASE", "true").lower() == "true"
@@ -115,12 +118,12 @@ def fetch_latest_news_from_web(limit: int = 5) -> list[dict]:
 
 
 @app.on_event("startup")
-def startup():
+async def startup():
     global predictor
 
     if USE_DATABASE:
         try:
-            init_db()
+            await async_init_db()
             logger.info("База данных инициализирована успешно")
         except Exception as e:
             logger.error("Не удалось инициализировать БД: %s", e)
@@ -173,6 +176,19 @@ class PredictNewsResponse(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok", "model_loaded": predictor is not None}
+
+
+@app.get("/news")
+def get_news(limit: int = 5, db: Session = Depends(get_db)):
+    """Вернуть последние новости ЦБ без предсказаний (для бота)."""
+    limit = max(1, min(limit, 20))
+    if USE_DATABASE:
+        news = fetch_latest_news_from_db(db, limit=limit)
+        if not news:
+            news = fetch_latest_news_from_web(limit=limit)
+    else:
+        news = fetch_latest_news_from_web(limit=limit)
+    return {"news": news}
 
 
 @app.post("/predict", response_model=PredictResponse)

@@ -1,9 +1,11 @@
 """Модели базы данных для хранения данных Банка России."""
 
+import enum
+import uuid
 from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Float, Integer, String, Text, Date, Index
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from cbr_news.database import Base
 
@@ -134,3 +136,41 @@ class Reserve(Base):
 
     def __repr__(self):
         return f"<Reserve(date={self.date}, avg={self.reserves_avg})>"
+
+
+class TaskType(str, enum.Enum):
+    train = "train"
+    predict = "predict"
+
+
+class TaskStatus(str, enum.Enum):
+    pending = "pending"
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+
+
+class Task(Base):
+    __tablename__ = "tasks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    celery_task_id = Column(String(255), nullable=True, index=True)
+    task_type = Column(String(20), nullable=False, index=True)
+    status = Column(String(20), nullable=False, default=TaskStatus.pending.value, index=True)
+    params = Column(JSONB, nullable=True)
+    result = Column(JSONB, nullable=True)
+    error = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("idx_tasks_status", "status"),
+        Index("idx_tasks_type_status", "task_type", "status"),
+        Index("idx_tasks_created_at", "created_at"),
+    )
+
+    def __repr__(self):
+        return f"<Task(id={self.id}, type={self.task_type}, status={self.status})>"

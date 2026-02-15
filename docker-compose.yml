@@ -17,6 +17,20 @@ services:
       retries: 5
     restart: unless-stopped
 
+  redis:
+    image: redis:7-alpine
+    container_name: cbr-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   api:
     build: .
     container_name: cbr-api
@@ -24,18 +38,21 @@ services:
       - "8000:8000"
     environment:
       - CHECKPOINT_PATH=/app/outputs
-      - CONFIG_PATH=/app/configs/config.yaml
+      - CONFIG_PATH=/app/configs/multitask_config.yaml
       - USE_DATABASE=true
       - POSTGRES_USER=${POSTGRES_USER:-cbr_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-cbr_password}
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=${POSTGRES_DB:-cbr_news}
+      - REDIS_URL=redis://redis:6379/0
     volumes:
       - ./outputs:/app/outputs:ro
       - ./checkpoints:/app/checkpoints:ro
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -44,6 +61,42 @@ services:
       retries: 3
       start_period: 60s
     restart: unless-stopped
+
+  celery-worker:
+    build: .
+    container_name: cbr-celery-worker
+    command: >
+      celery -A cbr_news.celery_app:celery_app
+      worker --loglevel=info
+      --concurrency=1 --pool=solo
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-cbr_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-cbr_password}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-cbr_news}
+      - REDIS_URL=redis://redis:6379/0
+      - CHECKPOINT_PATH=/app/outputs
+      - CONFIG_PATH=/app/configs/multitask_config.yaml
+    volumes:
+      - ./outputs:/app/outputs
+      - ./checkpoints:/app/checkpoints
+      - ./data:/app/data:ro
+      - ./configs:/app/configs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    # Для доступа к GPU раскомментировать:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
 
   bot:
     build: .
@@ -59,3 +112,4 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
