@@ -150,7 +150,7 @@ class CBRNewsMultiTaskModel(pl.LightningModule):
     def _compute_loss(self, batch, outputs):
         """Вычисление комбинированного loss"""
         # Main task loss
-        main_labels = batch["key_rate_label"]
+        main_labels = batch["ruonia_label"]
         main_logits = outputs['main_logits']
         main_loss = self.main_loss_fn(main_logits, main_labels)
 
@@ -186,7 +186,7 @@ class CBRNewsMultiTaskModel(pl.LightningModule):
 
         # Предсказания для главной задачи
         main_logits = outputs['main_logits']
-        main_labels = batch["key_rate_label"]
+        main_labels = batch["ruonia_label"]
         main_preds = torch.argmax(main_logits, dim=1)
 
         # Метрики для главной задачи

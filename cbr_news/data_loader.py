@@ -109,18 +109,25 @@ class CBRNewsDataLoader:
                 logger.warning(f"Не удалось настроить DVC remote: {e}")
 
     def download_data(self, force_download: bool = False) -> pd.DataFrame:
-        """Скачивание данных через DVC или парсинг"""
         logger.info("Загрузка данных...")
+
+        run_parser = True
+        try:
+            run_parser = self.config.data.run_parser
+        except (AttributeError, KeyError):
+            pass
+
+        if not run_parser:
+            logger.info("run_parser=false, загрузка данных из БД...")
+            return self._collect_data_from_source()
 
         if self.data_path.exists() and not force_download:
             logger.info(f"Данные уже существуют: {self.data_path}")
             return self._load_local_data()
 
-        # Попытка загрузки через DVC
         try:
             logger.info("Попытка загрузки через DVC...")
             fs = DVCFileSystem()
-            # Проверяем, существует ли файл в DVC перед загрузкой
             try:
                 if fs.exists(str(self.data_path)):
                     fs.get(str(self.data_path), str(self.data_path))
@@ -231,8 +238,13 @@ class CBRNewsDataLoader:
         return text
 
     def download_multitask_data(self, force_download: bool = False) -> pd.DataFrame:
-        """Загрузка multi-task данных"""
         logger.info("Загрузка multi-task данных...")
+
+        run_parser = True
+        try:
+            run_parser = self.config.data.run_parser
+        except (AttributeError, KeyError):
+            pass
 
         try:
             project_root = Path(get_original_cwd())
@@ -241,17 +253,14 @@ class CBRNewsDataLoader:
 
         multitask_path = project_root / "data" / "cbr_multitask_dataset.csv"
 
-        if multitask_path.exists() and not force_download:
+        if run_parser and multitask_path.exists() and not force_download:
             logger.info(f"Multi-task данные уже существуют: {multitask_path}")
             df = pd.read_csv(multitask_path)
             logger.info(f"Загружено {len(df)} записей")
             return df
 
-        # Если файла нет, создаем его
-        logger.info("Multi-task датасет не найден, создаем...")
-        df_processed = self.parser.collect_all_data()
-
-        # Создаем multi-task датасет
+        logger.info("Создание multi-task датасета...")
+        self.parser.collect_all_data()
         df_multitask = self.parser.prepare_multitask_dataset(df_processed=None)
 
         return df_multitask

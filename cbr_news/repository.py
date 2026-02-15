@@ -73,8 +73,16 @@ class NewsRepository:
                 return session.query(News).filter_by(link=link).first()
 
     @staticmethod
+    def get_existing_links(session: Session, links: list) -> set:
+        rows = session.query(News.link).filter(News.link.in_(links)).all()
+        return {row[0] for row in rows}
+
+    @staticmethod
+    def get_all(session: Session) -> List[News]:
+        return session.query(News).order_by(News.date).all()
+
+    @staticmethod
     def count(session: Session) -> int:
-        """Подсчет общего количества новостей."""
         return session.query(func.count(News.id)).scalar()
 
 
@@ -153,6 +161,15 @@ class CurrencyRateRepository:
             .first()
         )
 
+    @staticmethod
+    def get_all_by_currency(session: Session, currency_code: str) -> List[CurrencyRate]:
+        return (
+            session.query(CurrencyRate)
+            .filter_by(currency_code=currency_code)
+            .order_by(CurrencyRate.date)
+            .all()
+        )
+
 
 class InflationRepository:
     """Репозиторий для работы с инфляцией."""
@@ -174,6 +191,10 @@ class InflationRepository:
         """Получение последней инфляции."""
         return session.query(Inflation).order_by(desc(Inflation.date)).first()
 
+    @staticmethod
+    def get_all(session: Session) -> List[Inflation]:
+        return session.query(Inflation).order_by(Inflation.date).all()
+
 
 class RuoniaRepository:
     """Репозиторий для работы со ставкой RUONIA."""
@@ -194,6 +215,10 @@ class RuoniaRepository:
     def get_latest(session: Session) -> Optional[Ruonia]:
         """Получение последней ставки RUONIA."""
         return session.query(Ruonia).order_by(desc(Ruonia.date)).first()
+
+    @staticmethod
+    def get_all(session: Session) -> List[Ruonia]:
+        return session.query(Ruonia).order_by(Ruonia.date).all()
 
 
 class PreciousMetalRepository:
@@ -228,6 +253,10 @@ class PreciousMetalRepository:
             .order_by(desc(PreciousMetal.date))
             .first()
         )
+
+    @staticmethod
+    def get_all(session: Session) -> List[PreciousMetal]:
+        return session.query(PreciousMetal).order_by(PreciousMetal.date).all()
 
 
 class ReserveRepository:
@@ -265,3 +294,7 @@ class ReserveRepository:
     def get_latest(session: Session) -> Optional[Reserve]:
         """Получение последних резервов."""
         return session.query(Reserve).order_by(desc(Reserve.date)).first()
+
+    @staticmethod
+    def get_all(session: Session) -> List[Reserve]:
+        return session.query(Reserve).order_by(Reserve.date).all()

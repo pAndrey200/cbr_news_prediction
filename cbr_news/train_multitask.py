@@ -125,7 +125,7 @@ def train_multitask(cfg: DictConfig):
 
     for i, pred in enumerate(predictions):
         logger.info(f"\nТекст: {sample_texts[i]}")
-        logger.info(f"Предсказание ключевой ставки: {pred['prediction']}")
+        logger.info(f"Предсказание RUONIA: {pred['prediction']}")
         logger.info(f"Вероятности: {pred['probabilities']}")
         logger.info(f"Вспомогательные предсказания:")
         for task, task_pred in pred['auxiliary_predictions'].items():

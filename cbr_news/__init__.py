@@ -7,6 +7,7 @@ from cbr_news.model import CBRNewsModel
 __all__ = [
     "CBRNewsDataLoader",
     "CBRDataParser",
+    "CBRNewsParser",
     "CBRNewsDataset",
     "CBRNewsDataModule",
     "CBRNewsModel",
@@ -21,6 +22,9 @@ def __getattr__(name: str):
     if name == "CBRDataParser":
         from cbr_news.parser import CBRDataParser
         return CBRDataParser
+    if name == "CBRNewsParser":
+        from cbr_news.news_parser import CBRNewsParser
+        return CBRNewsParser
     if name == "CBRNewsDataLoader":
         from cbr_news.data_loader import CBRNewsDataLoader
         return CBRNewsDataLoader

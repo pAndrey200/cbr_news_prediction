@@ -241,14 +241,11 @@ class CBRNewsMultiTaskDataModule(pl.LightningDataModule):
         # Подготовка меток для всех задач
         def prepare_labels(df_subset):
             labels = {}
-            # Основная задача - ключевая ставка
             if 'target' in df_subset.columns:
-                # Преобразуем категории в числа
                 label_mapping = {label: i for i, label in enumerate(self.config.data.classes)}
-                labels['key_rate'] = df_subset['target'].map(label_mapping).tolist()
+                labels['ruonia'] = df_subset['target'].map(label_mapping).tolist()
 
-            # Вспомогательные задачи
-            auxiliary_tasks = ['usd', 'eur', 'cny', 'inflation', 'ruonia']
+            auxiliary_tasks = ['usd', 'eur', 'cny', 'key_rate']
             for task in auxiliary_tasks:
                 label_col = f'{task}_label'
                 if label_col in df_subset.columns:
