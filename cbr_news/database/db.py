@@ -31,9 +31,6 @@ def get_async_database_url() -> str:
     """Async URL (asyncpg) — FastAPI."""
     return _build_url("asyncpg")
 
-
-# ---- sync engine (Celery worker, парсеры, data_loader) ----
-
 engine = create_engine(
     get_database_url(),
     pool_size=10,
@@ -43,9 +40,6 @@ engine = create_engine(
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-
-# ---- async engine (FastAPI) ----
 
 async_engine = create_async_engine(
     get_async_database_url(),
@@ -58,9 +52,6 @@ async_engine = create_async_engine(
 AsyncSessionLocal = async_sessionmaker(
     async_engine, class_=AsyncSession, expire_on_commit=False
 )
-
-
-# ---- context managers / dependencies ----
 
 @contextmanager
 def get_db_session() -> Generator[Session, None, None]:
@@ -97,12 +88,12 @@ async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
 
 def init_db():
     """Создание таблиц через sync engine."""
-    from cbr_news import models  # noqa: F401
+    from cbr_news import models
     Base.metadata.create_all(bind=engine)
 
 
 async def async_init_db():
     """Создание таблиц через async engine."""
-    from cbr_news import models  # noqa: F401
+    from cbr_news import models
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

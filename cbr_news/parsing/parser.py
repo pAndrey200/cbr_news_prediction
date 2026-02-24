@@ -8,7 +8,7 @@ import pandas as pd
 from bs4 import BeautifulSoup
 from hydra.utils import get_original_cwd
 
-from cbr_news.news_parser import CBRNewsParser
+from cbr_news.parsing.news_parser import CBRNewsParser
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +38,8 @@ class CBRDataParser:
 
         if self.use_database:
             try:
-                from cbr_news.database import get_db_session
-                from cbr_news.repository import (
+                from cbr_news.database.db import get_db_session
+                from cbr_news.database.repository import (
                     CurrencyRateRepository,
                     InflationRepository,
                     KeyRateRepository,
@@ -611,7 +611,7 @@ class CBRDataParser:
         if not self.use_database:
             raise RuntimeError("БД недоступна, невозможно загрузить данные")
 
-        from cbr_news.repository import NewsRepository
+        from cbr_news.database.repository import NewsRepository
 
         with self.get_db_session() as session:
             news_list = NewsRepository.get_all(session)
@@ -627,7 +627,7 @@ class CBRDataParser:
             return pd.DataFrame(data, columns=["date", "link", "title", "release"])
 
     def _load_numeric_from_db(self):
-        from cbr_news.repository import (
+        from cbr_news.database.repository import (
             CurrencyRateRepository,
             InflationRepository,
             KeyRateRepository,

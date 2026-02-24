@@ -130,7 +130,7 @@ class CBRNewsDataModule(pl.LightningDataModule):
 
     def setup(self, stage: str = None):
         """Настройка датасетов"""
-        from cbr_news.data_loader import CBRNewsDataLoader
+        from cbr_news.parsing.data_loader import CBRNewsDataLoader
 
         data_loader = CBRNewsDataLoader(self.config)
 
@@ -220,7 +220,7 @@ class CBRNewsMultiTaskDataModule(pl.LightningDataModule):
 
     def setup(self, stage: str = None):
         """Настройка датасетов для multi-task обучения"""
-        from cbr_news.data_loader import CBRNewsDataLoader
+        from cbr_news.parsing.data_loader import CBRNewsDataLoader
         from sklearn.model_selection import train_test_split
 
         data_loader = CBRNewsDataLoader(self.config)

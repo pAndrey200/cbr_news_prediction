@@ -8,7 +8,7 @@ import fire
 project_root = Path(__file__).parent
 sys.path.append(str(project_root))
 
-from cbr_news.train_multitask import train_multitask
+from cbr_news.ml.train_multitask import train_multitask
 
 
 def main():

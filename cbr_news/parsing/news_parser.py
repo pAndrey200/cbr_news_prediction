@@ -39,8 +39,8 @@ class CBRNewsParser:
 
         if self.use_database:
             try:
-                from cbr_news.database import get_db_session
-                from cbr_news.repository import NewsRepository
+                from cbr_news.database.db import get_db_session
+                from cbr_news.database.repository import NewsRepository
 
                 self.get_db_session = get_db_session
                 self.news_repo = NewsRepository

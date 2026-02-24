@@ -6,7 +6,7 @@ from sqlalchemy import desc, func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from cbr_news.models import (
+from cbr_news.database.models import (
     CurrencyRate,
     Inflation,
     KeyRate,

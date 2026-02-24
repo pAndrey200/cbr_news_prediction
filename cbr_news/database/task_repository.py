@@ -9,7 +9,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from cbr_news.models import Task, TaskStatus
+from cbr_news.database.models import Task, TaskStatus
 
 logger = logging.getLogger(__name__)
 

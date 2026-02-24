@@ -6,10 +6,10 @@ import traceback
 from pathlib import Path
 from uuid import UUID
 
-from cbr_news.celery_app import celery_app
-from cbr_news.database import SessionLocal
-from cbr_news.models import TaskStatus
-from cbr_news.task_repository import TaskRepositorySync
+from cbr_news.workers.celery_app import celery_app
+from cbr_news.database.db import SessionLocal
+from cbr_news.database.models import TaskStatus
+from cbr_news.database.task_repository import TaskRepositorySync
 
 logger = logging.getLogger(__name__)
 

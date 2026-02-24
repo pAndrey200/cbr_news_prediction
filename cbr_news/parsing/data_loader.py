@@ -6,7 +6,7 @@ import pandas as pd
 from dvc.api import DVCFileSystem
 from hydra.utils import get_original_cwd
 
-from cbr_news.parser import CBRDataParser
+from cbr_news.parsing.parser import CBRDataParser
 
 logger = logging.getLogger(__name__)
 

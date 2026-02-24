@@ -8,10 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cbr_news.database import get_async_db
-from cbr_news.models import TaskStatus, TaskType
-from cbr_news.task_repository import TaskRepositoryAsync
-from cbr_news.tasks import run_prediction, run_training, _default_checkpoint_path
+from cbr_news.database.db import get_async_db
+from cbr_news.database.models import TaskStatus, TaskType
+from cbr_news.database.task_repository import TaskRepositoryAsync
+from cbr_news.workers.tasks import run_prediction, run_training, _default_checkpoint_path
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tasks", tags=["tasks"])

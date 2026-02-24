@@ -14,9 +14,9 @@ model:
   num_frozen_layers: 0
 
   auxiliary_tasks:
-    - usd
-    - inflation
-    - key_rate
+    # - usd
+    # - inflation
+     - key_rate
 
   # Веса для loss функций
   auxiliary_weight: 0.3  # вес для auxiliary tasks

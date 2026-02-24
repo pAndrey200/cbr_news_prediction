@@ -7,7 +7,7 @@ from datetime import datetime
 from sqlalchemy import Column, DateTime, Float, Integer, String, Text, Date, Index
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
-from cbr_news.database import Base
+from cbr_news.database.db import Base
 
 
 class News(Base):

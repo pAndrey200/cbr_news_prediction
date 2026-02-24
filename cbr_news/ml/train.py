@@ -12,9 +12,9 @@ from pytorch_lightning.callbacks import (
 )
 from pytorch_lightning.loggers import MLFlowLogger
 
-from cbr_news.dataset import CBRNewsDataModule
-from cbr_news.model import CBRNewsModel
-from cbr_news.utils import log_git_info, setup_logging
+from cbr_news.ml.dataset import CBRNewsDataModule
+from cbr_news.ml.models.base_model import CBRNewsModel
+from cbr_news.ml.utils import log_git_info, setup_logging
 
 warnings.filterwarnings("ignore")
 
@@ -34,7 +34,6 @@ def train(cfg: DictConfig):
     mlflow_logger = MLFlowLogger(
         experiment_name=cfg.training.mlflow.experiment_name,
         tracking_uri=cfg.training.mlflow.tracking_uri,
-        log_model=False,  # Отключаем автоматическое логирование модели, чтобы избежать ошибок с boto3
     )
 
     mlflow_logger.log_hyperparams(OmegaConf.to_container(cfg, resolve=True))

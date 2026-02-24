@@ -12,16 +12,16 @@ from pytorch_lightning.callbacks import (
 )
 from pytorch_lightning.loggers import MLFlowLogger
 
-from cbr_news.dataset import CBRNewsMultiTaskDataModule
-from cbr_news.multitask_model import CBRNewsMultiTaskModel
-from cbr_news.utils import log_git_info, setup_logging
+from cbr_news.ml.dataset import CBRNewsMultiTaskDataModule
+from cbr_news.ml.models.multitask_model import CBRNewsMultiTaskModel
+from cbr_news.ml.utils import log_git_info, setup_logging
 
 warnings.filterwarnings("ignore")
 
 logger = logging.getLogger(__name__)
 
 
-@hydra.main(config_path="../configs", config_name="multitask_config", version_base="1.3")
+@hydra.main(config_path="../../configs", config_name="multitask_config", version_base="1.3")
 def train_multitask(cfg: DictConfig):
     """Основная функция тренировки multi-task модели"""
     setup_logging()

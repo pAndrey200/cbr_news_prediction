@@ -12,9 +12,9 @@ import sys
 _project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_project_root))
 
-from cbr_news.database import get_db, init_db, async_init_db
-from cbr_news.inference import CBRNewsPredictor
-from cbr_news.repository import NewsRepository
+from cbr_news.database.db import get_db, init_db, async_init_db
+from cbr_news.ml.inference import CBRNewsPredictor
+from cbr_news.database.repository import NewsRepository
 from api.tasks_router import router as tasks_router
 
 logging.basicConfig(level=logging.INFO)
