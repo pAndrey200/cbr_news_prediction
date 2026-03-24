@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cbr-basic-auth
+  namespace: cbr-news
+type: Opaque
+data:
+  # admin:cbr-admin
+  auth: YWRtaW46JDJiJDA0JGRKVVdJZS5RR1U2Vnd3LklGRDl3S09nV1hxSzdwQ2xlcXVna2dqMVdPTlZMcUNPZUFDcGJl
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cbr-api-public
+  namespace: cbr-news
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 8000
+          - path: /predict
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 8000
+          - path: /predict_news
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 8000
+          - path: /predict_key_rate
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cbr-api-protected
+  namespace: cbr-news
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: cbr-basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: "CBR News API - admin only"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /docs
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 8000
+          - path: /tasks
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 8000
