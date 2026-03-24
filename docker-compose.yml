@@ -11,7 +11,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cbr_user}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cbr_user} -d ${POSTGRES_DB:-cbr_news}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -37,8 +37,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - CHECKPOINT_PATH=/app/outputs
-      - CONFIG_PATH=/app/configs/multitask_config.yaml
+      - BEST_CHECKPOINT=/app/checkpoints/sweep/run_002/best-v24.ckpt
+      - CHECKPOINT_PATH=/app/checkpoints
       - USE_DATABASE=true
       - POSTGRES_USER=${POSTGRES_USER:-cbr_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-cbr_password}
@@ -47,8 +47,8 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-cbr_news}
       - REDIS_URL=redis://redis:6379/0
     volumes:
-      - ./outputs:/app/outputs:ro
       - ./checkpoints:/app/checkpoints:ro
+      - ./data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -66,7 +66,7 @@ services:
     build: .
     container_name: cbr-celery-worker
     command: >
-      celery -A cbr_news.celery_app:celery_app
+      celery -A cbr_news.workers.celery_app:celery_app
       worker --loglevel=info
       --concurrency=1 --pool=solo
     environment:
@@ -76,10 +76,9 @@ services:
       - POSTGRES_PORT=5432
       - POSTGRES_DB=${POSTGRES_DB:-cbr_news}
       - REDIS_URL=redis://redis:6379/0
-      - CHECKPOINT_PATH=/app/outputs
-      - CONFIG_PATH=/app/configs/multitask_config.yaml
+      - BEST_CHECKPOINT=/app/checkpoints/sweep/run_002/best-v24.ckpt
+      - CHECKPOINT_PATH=/app/checkpoints
     volumes:
-      - ./outputs:/app/outputs
       - ./checkpoints:/app/checkpoints
       - ./data:/app/data:ro
       - ./configs:/app/configs:ro
@@ -89,7 +88,6 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-    # Для доступа к GPU раскомментировать:
     # deploy:
     #   resources:
     #     reservations:
@@ -97,6 +95,23 @@ services:
     #         - driver: nvidia
     #           count: 1
     #           capabilities: [gpu]
+
+  parser:
+    build: .
+    container_name: cbr-parser
+    command: ["python", "-m", "cbr_news.parsing.sync_data", "--interval-hours", "6"]
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-cbr_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-cbr_password}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-cbr_news}
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
 
   bot:
     build: .

@@ -7,7 +7,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements-docker.txt .
-RUN pip install --no-cache-dir -r requirements-docker.txt
+# CPU-only torch (~190 MB vs 915 MB for CUDA). Inference runs on CPU in Docker.
+RUN pip install --no-cache-dir --timeout 120 \
+    torch==2.1.2+cpu torchvision==0.16.2+cpu \
+    --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir --timeout 120 -r requirements-docker.txt
 
 COPY cbr_news ./cbr_news
 COPY api ./api
