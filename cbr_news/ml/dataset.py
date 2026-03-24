@@ -228,15 +228,36 @@ class CBRNewsMultiTaskDataModule(pl.LightningDataModule):
         # Загрузка multi-task данных
         df = data_loader.download_multitask_data()
 
-        # Разделение по времени
-        train_df, test_df = data_loader.split_by_time_multitask(df)
+        # TEMPORAL split для train/val/test (важно для временных рядов!)
+        # Извлекаем год из даты
+        def extract_year(date_str):
+            try:
+                parts = str(date_str).split(".")
+                if len(parts) == 3:
+                    return int(parts[2])
+            except:
+                pass
+            return 2020
 
-        # Дополнительное разделение train на train/val
-        train_df, val_df = train_test_split(
-            train_df,
-            test_size=self.config.data.val_size,
-            random_state=self.config.seed,
-        )
+        df['year'] = df['date'].apply(extract_year)
+
+        # Разделяем по годам: train, val, test
+        train_years = self.config.data.get('train_years', list(range(2010, 2022)))
+        val_years = self.config.data.get('val_years', [2022, 2023])
+        test_years = self.config.data.get('test_years', [2024, 2025])
+
+        train_df = df[df['year'].isin(train_years)].copy()
+        val_df = df[df['year'].isin(val_years)].copy()
+        test_df = df[df['year'].isin(test_years)].copy()
+
+        logger.info(f"Train: {len(train_df)} samples, years: {sorted(train_df['year'].unique())}")
+        logger.info(f"Val: {len(val_df)} samples, years: {sorted(val_df['year'].unique())}")
+        logger.info(f"Test: {len(test_df)} samples, years: {sorted(test_df['year'].unique())}")
+
+        # Удаляем временный столбец
+        train_df = train_df.drop(columns=['year'])
+        val_df = val_df.drop(columns=['year'])
+        test_df = test_df.drop(columns=['year'])
 
         # Подготовка меток для всех задач
         def prepare_labels(df_subset):

@@ -22,13 +22,17 @@ class CBRNewsModel(pl.LightningModule):
         self.backbone = AutoModel.from_pretrained(config.model.backbone)
 
         if config.model.freeze_backbone:
+            # Freeze the entire backbone first
             for param in self.backbone.parameters():
                 param.requires_grad = False
 
-            if config.model.num_frozen_layers > 0:
-                for layer in self.backbone.encoder.layer[
-                    -config.model.num_frozen_layers :
-                ]:
+            # Unfreeze only the top (last) layers.
+            # num_frozen_layers = layers to FREEZE from the bottom.
+            # Example: num_frozen_layers=9 → freeze layers 0-8, train layers 9-11 (top 3).
+            total_layers = len(self.backbone.encoder.layer)
+            n_trainable = total_layers - config.model.num_frozen_layers
+            if n_trainable > 0:
+                for layer in self.backbone.encoder.layer[-n_trainable:]:
                     for param in layer.parameters():
                         param.requires_grad = True
 

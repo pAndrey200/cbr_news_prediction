@@ -23,13 +23,17 @@ class CBRNewsMultiTaskModel(pl.LightningModule):
         self.backbone = AutoModel.from_pretrained(config.model.backbone)
 
         if config.model.freeze_backbone:
+            # Freeze the entire backbone first
             for param in self.backbone.parameters():
                 param.requires_grad = False
 
-            if config.model.num_frozen_layers > 0:
-                for layer in self.backbone.encoder.layer[
-                    -config.model.num_frozen_layers :
-                ]:
+            # Unfreeze only the top (last) layers.
+            # num_frozen_layers = layers to FREEZE from the bottom.
+            # Example: num_frozen_layers=9 → freeze layers 0-8, train layers 9-11 (top 3).
+            total_layers = len(self.backbone.encoder.layer)
+            n_trainable = total_layers - config.model.num_frozen_layers
+            if n_trainable > 0:
+                for layer in self.backbone.encoder.layer[-n_trainable:]:
                     for param in layer.parameters():
                         param.requires_grad = True
 
@@ -64,16 +68,19 @@ class CBRNewsMultiTaskModel(pl.LightningModule):
         )
 
         # Loss functions
-        self.auxiliary_loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
-        self.main_loss_fn = nn.CrossEntropyLoss()
+        # Class weights для несбалансированного key_rate (97% down, 2.4% up)
+        # down (0): вес 1.0, up (1): вес 40.0 (инвертируем частоты)
+        key_rate_weights = torch.tensor([1.0, 40.0])
+        self.auxiliary_loss_fn = nn.CrossEntropyLoss(
+            ignore_index=-100,
+            weight=key_rate_weights
+        )
+        # Label smoothing для борьбы с переобучением
+        self.main_loss_fn = nn.CrossEntropyLoss(label_smoothing=0.1)
 
         # Task weights (можно настроить для баланса потерь)
         self.auxiliary_weight = config.model.get('auxiliary_weight', 0.3)
         self.main_weight = config.model.get('main_weight', 1.0)
-
-        self.train_outputs = []
-        self.val_outputs = []
-        self.test_outputs = []
 
         logger.info(f"Multi-task модель инициализирована: {config.model.backbone}")
         logger.info(f"Auxiliary tasks: {self.auxiliary_tasks}")
@@ -193,12 +200,22 @@ class CBRNewsMultiTaskModel(pl.LightningModule):
         acc = accuracy_score(main_labels.cpu(), main_preds.cpu())
         f1 = f1_score(main_labels.cpu(), main_preds.cpu(), average="weighted", zero_division=0)
 
-        # Логирование
-        self.log(f"{stage}_loss", total_loss, prog_bar=True)
-        self.log(f"{stage}_main_loss", main_loss, prog_bar=True)
-        self.log(f"{stage}_aux_loss", auxiliary_loss, prog_bar=False)
-        self.log(f"{stage}_acc", acc, prog_bar=True)
-        self.log(f"{stage}_f1", f1, prog_bar=True)
+        # Логирование для Early Stopping
+        # Для train: логируем каждый шаг для прогресс-бара
+        # Для val/test: логируем только на уровне эпохи
+        if stage == "train":
+            self.log(f"{stage}_loss", total_loss, prog_bar=True, on_step=True, on_epoch=False)
+            self.log(f"{stage}_main_loss", main_loss, prog_bar=True, on_step=True, on_epoch=False)
+            self.log(f"{stage}_aux_loss", auxiliary_loss, prog_bar=False, on_step=True, on_epoch=False)
+            self.log(f"{stage}_acc", acc, prog_bar=True, on_step=True, on_epoch=False)
+            self.log(f"{stage}_f1", f1, prog_bar=True, on_step=True, on_epoch=False)
+        else:
+            # val и test - только на уровне эпохи для Early Stopping
+            self.log(f"{stage}_loss", total_loss, prog_bar=True, on_step=False, on_epoch=True)
+            self.log(f"{stage}_main_loss", main_loss, prog_bar=True, on_step=False, on_epoch=True)
+            self.log(f"{stage}_aux_loss", auxiliary_loss, prog_bar=False, on_step=False, on_epoch=True)
+            self.log(f"{stage}_acc", acc, prog_bar=True, on_step=False, on_epoch=True)
+            self.log(f"{stage}_f1", f1, prog_bar=True, on_step=False, on_epoch=True)
 
         # Метрики для auxiliary tasks
         for task in self.auxiliary_tasks:
@@ -214,24 +231,12 @@ class CBRNewsMultiTaskModel(pl.LightningModule):
                     valid_labels = task_labels[valid_mask]
                     valid_preds = task_preds[valid_mask]
                     task_acc = accuracy_score(valid_labels.cpu(), valid_preds.cpu())
-                    self.log(f"{stage}_{task}_acc", task_acc, prog_bar=False)
+                    if stage == "train":
+                        self.log(f"{stage}_{task}_acc", task_acc, prog_bar=False, on_step=True, on_epoch=False)
+                    else:
+                        self.log(f"{stage}_{task}_acc", task_acc, prog_bar=False, on_step=False, on_epoch=True)
 
-        output = {
-            "loss": total_loss,
-            "main_preds": main_preds,
-            "main_labels": main_labels,
-            "acc": acc,
-            "f1": f1
-        }
-
-        if stage == "train":
-            self.train_outputs.append(output)
-        elif stage == "val":
-            self.val_outputs.append(output)
-        else:
-            self.test_outputs.append(output)
-
-        return output
+        return total_loss
 
     def training_step(self, batch, batch_idx):
         return self._shared_step(batch, batch_idx, "train")
@@ -242,33 +247,6 @@ class CBRNewsMultiTaskModel(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         return self._shared_step(batch, batch_idx, "test")
 
-    def on_train_epoch_end(self):
-        """В конце тренировочной эпохи"""
-        self._log_epoch_metrics("train")
-        self.train_outputs.clear()
-
-    def on_validation_epoch_end(self):
-        """В конце валидационной эпохи"""
-        self._log_epoch_metrics("val")
-        self.val_outputs.clear()
-
-    def _log_epoch_metrics(self, stage: str):
-        """Логирование метрик эпохи"""
-        outputs = self.train_outputs if stage == "train" else self.val_outputs
-
-        if not outputs:
-            return
-
-        avg_loss = torch.stack([x["loss"] for x in outputs]).mean()
-        all_preds = torch.cat([x["main_preds"] for x in outputs])
-        all_labels = torch.cat([x["main_labels"] for x in outputs])
-
-        epoch_acc = accuracy_score(all_labels.cpu(), all_preds.cpu())
-        epoch_f1 = f1_score(all_labels.cpu(), all_preds.cpu(), average="weighted", zero_division=0)
-
-        self.log(f"{stage}_epoch_loss", avg_loss, prog_bar=True)
-        self.log(f"{stage}_epoch_acc", epoch_acc, prog_bar=True)
-        self.log(f"{stage}_epoch_f1", epoch_f1, prog_bar=True)
 
     def predict(self, texts: List[str], tokenizer, device: str = None):
         """Предсказание для новых текстов"""

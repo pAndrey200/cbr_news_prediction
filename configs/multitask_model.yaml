@@ -3,21 +3,20 @@ defaults:
 
 model:
   backbone: "DeepPavlov/rubert-base-cased"
-  num_classes: 3  # up, down, same для RUONIA
+  num_classes: 3
   dropout: 0.1
 
-  learning_rate: 2e-5
-  weight_decay: 0.01
-  warmup_steps: 100
+  learning_rate: 5e-6
+  weight_decay: 0.1 
+  warmup_steps: 200 
 
-  freeze_backbone: false
-  num_frozen_layers: 0
+  freeze_backbone: true
+  num_frozen_layers: 8
 
   auxiliary_tasks:
+    - key_rate 
     # - usd
     # - inflation
-     - key_rate
 
-  # Веса для loss функций
-  auxiliary_weight: 0.3  # вес для auxiliary tasks
-  main_weight: 1.0       # вес для главной задачи (ключевая ставка)
+  auxiliary_weight: 0.01
+  main_weight: 1.0
