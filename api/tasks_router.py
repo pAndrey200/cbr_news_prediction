@@ -89,7 +89,7 @@ async def create_prediction_task(
     db: AsyncSession = Depends(get_async_db),
 ):
     """Создать задачу на батч-предсказание."""
-    from cbr_news.tasks import _resolve_checkpoint
+    from cbr_news.workers.tasks import _resolve_checkpoint
     checkpoint = (
         _resolve_checkpoint(request.checkpoint_path)
         if request.checkpoint_path
