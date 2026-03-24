@@ -18,8 +18,7 @@ __all__ = [
     "CurrencyRate",
     "Inflation",
     "Ruonia",
-    "PreciousMetal",
-    "Reserve",
+    "OilPrice",
     "Task",
     "TaskStatus",
     "TaskType",
@@ -29,8 +28,7 @@ __all__ = [
     "CurrencyRateRepository",
     "InflationRepository",
     "RuoniaRepository",
-    "PreciousMetalRepository",
-    "ReserveRepository",
+    "OilPriceRepository",
     "TaskRepositorySync",
     "TaskRepositoryAsync",
 ]
@@ -65,14 +63,13 @@ def __getattr__(name: str):
         }[name]
 
     if name in ("News", "KeyRate", "CurrencyRate", "Inflation", "Ruonia",
-                "PreciousMetal", "Reserve", "Task", "TaskStatus", "TaskType"):
+                "OilPrice", "Task", "TaskStatus", "TaskType"):
         from cbr_news.database.models import (
             CurrencyRate,
             Inflation,
             KeyRate,
             News,
-            PreciousMetal,
-            Reserve,
+            OilPrice,
             Ruonia,
             Task,
             TaskStatus,
@@ -84,22 +81,20 @@ def __getattr__(name: str):
             "CurrencyRate": CurrencyRate,
             "Inflation": Inflation,
             "Ruonia": Ruonia,
-            "PreciousMetal": PreciousMetal,
-            "Reserve": Reserve,
+            "OilPrice": OilPrice,
             "Task": Task,
             "TaskStatus": TaskStatus,
             "TaskType": TaskType,
         }[name]
 
     if name in ("NewsRepository", "KeyRateRepository", "CurrencyRateRepository",
-                "InflationRepository", "RuoniaRepository", "PreciousMetalRepository", "ReserveRepository"):
+                "InflationRepository", "RuoniaRepository", "OilPriceRepository"):
         from cbr_news.database.repository import (
             CurrencyRateRepository,
             InflationRepository,
             KeyRateRepository,
             NewsRepository,
-            PreciousMetalRepository,
-            ReserveRepository,
+            OilPriceRepository,
             RuoniaRepository,
         )
         return {
@@ -108,8 +103,7 @@ def __getattr__(name: str):
             "CurrencyRateRepository": CurrencyRateRepository,
             "InflationRepository": InflationRepository,
             "RuoniaRepository": RuoniaRepository,
-            "PreciousMetalRepository": PreciousMetalRepository,
-            "ReserveRepository": ReserveRepository,
+            "OilPriceRepository": OilPriceRepository,
         }[name]
 
     if name in ("TaskRepositorySync", "TaskRepositoryAsync"):

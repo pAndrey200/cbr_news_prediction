@@ -88,12 +88,12 @@ async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
 
 def init_db():
     """Создание таблиц через sync engine."""
-    from cbr_news import models
+    from cbr_news.database import models  # noqa: F401
     Base.metadata.create_all(bind=engine)
 
 
 async def async_init_db():
     """Создание таблиц через async engine."""
-    from cbr_news import models
+    from cbr_news.database import models  # noqa: F401
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

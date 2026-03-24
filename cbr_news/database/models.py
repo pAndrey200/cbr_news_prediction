@@ -18,7 +18,7 @@ class News(Base):
     link = Column(String(512), unique=True, nullable=False, index=True)
     title = Column(Text, nullable=False)
     content = Column(Text, nullable=False)
-    news_type = Column(String(50), nullable=False, default="press_release")
+    news_type = Column(String(50), nullable=False, default="news")
 
     key_rate = Column(Float, nullable=True)
     inflation = Column(Float, nullable=True)
@@ -103,39 +103,18 @@ class Ruonia(Base):
         return f"<Ruonia(date={self.date}, rate={self.rate})>"
 
 
-class PreciousMetal(Base):
-    __tablename__ = "precious_metals"
-
-    id = Column(Integer, primary_key=True, index=True)
-    date = Column(Date, nullable=False, index=True)
-    metal_type = Column(String(20), nullable=False, index=True)
-    price = Column(Float, nullable=False)
-
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    __table_args__ = (
-        Index("idx_metal_date_type", "date", "metal_type", unique=True),
-    )
-
-    def __repr__(self):
-        return f"<PreciousMetal(date={self.date}, metal={self.metal_type}, price={self.price})>"
-
-
-class Reserve(Base):
-    __tablename__ = "reserves"
+class OilPrice(Base):
+    __tablename__ = "oil_prices"
 
     id = Column(Integer, primary_key=True, index=True)
     date = Column(Date, unique=True, nullable=False, index=True)
-    reserves_corset = Column(Float, nullable=True)
-    reserves_avg = Column(Float, nullable=True)
-    reserves_accounts = Column(Float, nullable=True)
+    price = Column(Float, nullable=False)  # Brent close price, USD/barrel
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     def __repr__(self):
-        return f"<Reserve(date={self.date}, avg={self.reserves_avg})>"
+        return f"<OilPrice(date={self.date}, price={self.price})>"
 
 
 class TaskType(str, enum.Enum):

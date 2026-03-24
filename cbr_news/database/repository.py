@@ -11,8 +11,7 @@ from cbr_news.database.models import (
     Inflation,
     KeyRate,
     News,
-    PreciousMetal,
-    Reserve,
+    OilPrice,
     Ruonia,
 )
 
@@ -221,80 +220,24 @@ class RuoniaRepository:
         return session.query(Ruonia).order_by(Ruonia.date).all()
 
 
-class PreciousMetalRepository:
-    """Репозиторий для работы с драгметаллами."""
+class OilPriceRepository:
+    """Репозиторий для цен на нефть Brent (USD/barrel)."""
 
     @staticmethod
-    def create_or_update(
-        session: Session, metal_date: date, metal_type: str, price: float
-    ) -> PreciousMetal:
-        """Создание или обновление цены драгметалла."""
-        stmt = insert(PreciousMetal).values(
-            date=metal_date, metal_type=metal_type, price=price
-        )
+    def create_or_update(session: Session, oil_date: date, price: float) -> OilPrice:
+        stmt = insert(OilPrice).values(date=oil_date, price=price)
         stmt = stmt.on_conflict_do_update(
-            index_elements=["date", "metal_type"],
+            index_elements=["date"],
             set_={"price": stmt.excluded.price, "updated_at": datetime.utcnow()},
         )
         session.execute(stmt)
         session.commit()
-        return (
-            session.query(PreciousMetal)
-            .filter_by(date=metal_date, metal_type=metal_type)
-            .first()
-        )
+        return session.query(OilPrice).filter_by(date=oil_date).first()
 
     @staticmethod
-    def get_latest(session: Session, metal_type: str) -> Optional[PreciousMetal]:
-        """Получение последней цены драгметалла."""
-        return (
-            session.query(PreciousMetal)
-            .filter_by(metal_type=metal_type)
-            .order_by(desc(PreciousMetal.date))
-            .first()
-        )
+    def get_latest(session: Session) -> Optional[OilPrice]:
+        return session.query(OilPrice).order_by(desc(OilPrice.date)).first()
 
     @staticmethod
-    def get_all(session: Session) -> List[PreciousMetal]:
-        return session.query(PreciousMetal).order_by(PreciousMetal.date).all()
-
-
-class ReserveRepository:
-    """Репозиторий для работы с резервами."""
-
-    @staticmethod
-    def create_or_update(
-        session: Session,
-        reserve_date: date,
-        reserves_corset: Optional[float] = None,
-        reserves_avg: Optional[float] = None,
-        reserves_accounts: Optional[float] = None,
-    ) -> Reserve:
-        """Создание или обновление резервов."""
-        stmt = insert(Reserve).values(
-            date=reserve_date,
-            reserves_corset=reserves_corset,
-            reserves_avg=reserves_avg,
-            reserves_accounts=reserves_accounts,
-        )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["date"],
-            set_={
-                "reserves_corset": stmt.excluded.reserves_corset,
-                "reserves_avg": stmt.excluded.reserves_avg,
-                "reserves_accounts": stmt.excluded.reserves_accounts,
-                "updated_at": datetime.utcnow(),
-            },
-        )
-        session.execute(stmt)
-        session.commit()
-        return session.query(Reserve).filter_by(date=reserve_date).first()
-
-    @staticmethod
-    def get_latest(session: Session) -> Optional[Reserve]:
-        """Получение последних резервов."""
-        return session.query(Reserve).order_by(desc(Reserve.date)).first()
-
-    @staticmethod
-    def get_all(session: Session) -> List[Reserve]:
-        return session.query(Reserve).order_by(Reserve.date).all()
+    def get_all(session: Session) -> List[OilPrice]:
+        return session.query(OilPrice).order_by(OilPrice.date).all()
