@@ -128,30 +128,18 @@ async def startup():
         except Exception as e:
             logger.error("Не удалось инициализировать БД: %s", e)
 
-    # 1) Exact file from BEST_CHECKPOINT (preferred — avoids picking wrong sweep run)
-    # 2) Fallback to CHECKPOINT_PATH directory scan (picks most recent .ckpt)
-    raw_best = os.environ.get("BEST_CHECKPOINT")
     raw = os.environ.get("CHECKPOINT_PATH")
-    checkpoint = None
-    if raw_best:
-        checkpoint = resolve_checkpoint_file(raw_best)
-    if not checkpoint and raw:
-        checkpoint = resolve_checkpoint_file(raw)
+    checkpoint = resolve_checkpoint_file(raw) if raw else None
     if not checkpoint:
-        # Default: best known sweep checkpoint
-        default_best = _project_root / "checkpoints" / "sweep" / "run_002" / "best-v24.ckpt"
-        if default_best.exists():
-            checkpoint = str(default_best)
-        else:
-            for p in (
-                _project_root / "checkpoints",
-                _project_root / "outputs",
-                Path("/app/checkpoints"),
-            ):
-                if p.exists():
-                    checkpoint = resolve_checkpoint_file(p)
-                    if checkpoint:
-                        break
+        for p in (
+            _project_root / "checkpoints",
+            _project_root / "outputs",
+            Path("/app/checkpoints"),
+        ):
+            if p.exists():
+                checkpoint = resolve_checkpoint_file(p)
+                if checkpoint:
+                    break
     if not checkpoint:
         logger.warning(
             "Чекпоинт не найден. API будет работать без предсказаний."
@@ -185,15 +173,6 @@ class PredictNewsResponse(BaseModel):
     summary: dict
 
 
-class KeyRateResponse(BaseModel):
-    prediction: str
-    probabilities: dict
-    current_rate: float
-    expected_rate: float
-    signal: dict
-    n_articles: int
-
-
 @app.get("/health")
 def health():
     return {"status": "ok", "model_loaded": predictor is not None}
@@ -221,32 +200,6 @@ def predict(request: PredictRequest):
         return PredictResponse(predictions=results)
     except Exception as e:
         logger.exception("Ошибка предсказания: %s", e)
-        raise HTTPException(500, str(e))
-
-
-@app.get("/predict_key_rate", response_model=KeyRateResponse)
-@app.post("/predict_key_rate", response_model=KeyRateResponse)
-def predict_key_rate(limit: int = 20, db: Session = Depends(get_db)):
-    """Прогноз решения ЦБ по ключевой ставке на основе последних новостей."""
-    if predictor is None:
-        raise HTTPException(503, "Модель не загружена")
-
-    if USE_DATABASE:
-        news = fetch_latest_news_from_db(db, limit=limit)
-        if not news:
-            news = fetch_latest_news_from_web(limit=limit)
-    else:
-        news = fetch_latest_news_from_web(limit=limit)
-
-    if not news:
-        raise HTTPException(502, "Не удалось загрузить новости")
-
-    texts = [n["text"] or n["title"] for n in news]
-    try:
-        result = predictor.predict_key_rate(texts=texts)
-        return KeyRateResponse(**result)
-    except Exception as e:
-        logger.exception("Ошибка предсказания ключевой ставки: %s", e)
         raise HTTPException(500, str(e))
 
 

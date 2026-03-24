@@ -5,6 +5,7 @@ import os
 import httpx
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.request import HTTPXRequest
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -15,6 +16,8 @@ logger = logging.getLogger(__name__)
 API_BASE = os.environ.get("API_URL", "http://localhost:8000")
 
 LABELS = {"down": "⬇️ Снижение", "same": "➡️ Без изменений", "up": "⬆️ Повышение"}
+RATE_LABELS = {"cut": "⬇️ Снижение ставки", "hold": "➡️ Без изменений", "hike": "⬆️ Повышение ставки"}
+TONE_LABELS = {"hawkish": "ястребиный (→ повышение)", "dovish": "голубиный (→ снижение)", "neutral": "нейтральный"}
 STATUS_ICONS = {
     "pending": "🕐",
     "running": "⚙️",
@@ -23,15 +26,15 @@ STATUS_ICONS = {
 }
 
 
-async def _api_get(path: str, params: dict = None) -> dict:
-    async with httpx.AsyncClient(timeout=15.0) as client:
+async def _api_get(path: str, params: dict = None, timeout: float = 15.0) -> dict:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.get(f"{API_BASE.rstrip('/')}{path}", params=params or {})
         r.raise_for_status()
         return r.json()
 
 
-async def _api_post(path: str, json: dict) -> dict:
-    async with httpx.AsyncClient(timeout=15.0) as client:
+async def _api_post(path: str, json: dict, timeout: float = 15.0) -> dict:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(f"{API_BASE.rstrip('/')}{path}", json=json)
         r.raise_for_status()
         return r.json()
@@ -90,11 +93,11 @@ def _format_prediction_result(task: dict) -> str:
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "Привет! Я бот для предсказания направления RUONIA по новостям ЦБ.\n\n"
+        "Привет! Я бот для анализа монетарной политики ЦБ РФ.\n\n"
         "Команды:\n"
-        "/predict_news [N] — предсказание по последним N новостям ЦБ\n"
-        "/predict <текст> — предсказание по тексту\n"
-        "/train [override=val ...] — запустить обучение модели\n"
+        "/predict_news [N] — направление RUONIA по последним N новостям\n"
+        "/rate — прогноз ключевой ставки на следующем заседании\n"
+        "/predict <текст> — предсказание RUONIA по тексту\n"
         "/status <task_id> — проверить статус задачи\n\n"
         "Или просто отправьте текст новости — верну предсказание."
     )
@@ -161,6 +164,61 @@ async def cmd_predict_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("\n".join(lines))
     else:
         await update.message.reply_text(_format_prediction_result(result))
+
+
+async def cmd_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Прогноз ключевой ставки на следующем заседании ЦБ."""
+    await update.message.reply_text("🔄 Анализирую последние новости для прогноза ключевой ставки...")
+
+    try:
+        data = await _api_get("/predict_key_rate", params={"limit": 20}, timeout=120.0)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 503:
+            await update.message.reply_text("Модель не загружена. Попробуйте позже.")
+        else:
+            await update.message.reply_text(f"Ошибка API: {e.response.status_code}")
+        return
+    except Exception as e:
+        logger.exception("Ошибка прогноза ставки: %s", e)
+        await update.message.reply_text("Не удалось получить прогноз. Попробуйте позже.")
+        return
+
+    pred = data.get("prediction", "?")
+    probs = data.get("probabilities", {})
+    signal = data.get("signal", {})
+    current = data.get("current_rate", 0)
+    expected = data.get("expected_rate", 0)
+    n_articles = data.get("n_articles", 0)
+
+    pred_ru = RATE_LABELS.get(pred, pred)
+    tone = TONE_LABELS.get(signal.get("tone", ""), "")
+
+    lines = [
+        "📊 ПРОГНОЗ КЛЮЧЕВОЙ СТАВКИ ЦБ РФ",
+        "",
+        f"Прогноз: {pred_ru}",
+        f"Текущая ставка: {current:.1f}%",
+        f"Ожидаемый уровень: {expected:.1f}%",
+        "",
+        "Вероятности:",
+        f"  Снижение: {probs.get('cut', 0):.0%}",
+        f"  Без изменений: {probs.get('hold', 0):.0%}",
+        f"  Повышение: {probs.get('hike', 0):.0%}",
+    ]
+
+    if signal:
+        lines.extend([
+            "",
+            f"Тон новостей: {tone}",
+            f"Статей проанализировано: {n_articles}",
+        ])
+        n_hike = signal.get("articles_hike", 0)
+        n_hold = signal.get("articles_hold", 0)
+        n_cut = signal.get("articles_cut", 0)
+        if n_hike or n_hold or n_cut:
+            lines.append(f"  ↑ повышение: {n_hike}  → нейтрально: {n_hold}  ↓ снижение: {n_cut}")
+
+    await update.message.reply_text("\n".join(lines))
 
 
 async def cmd_predict(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -287,16 +345,24 @@ def main() -> None:
     if not token:
         raise SystemExit("Установите переменную окружения TELEGRAM_BOT_TOKEN")
 
-    app = Application.builder().token(token).build()
+    request = HTTPXRequest(
+        connection_pool_size=4,
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0,
+    )
+    app = Application.builder().token(token).request(request).get_updates_request(request).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("predict_news", cmd_predict_news))
+    app.add_handler(CommandHandler("rate", cmd_rate))
     app.add_handler(CommandHandler("predict", cmd_predict))
     app.add_handler(CommandHandler("train", cmd_train))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     logger.info("Бот запущен")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, bootstrap_retries=-1)
 
 
 if __name__ == "__main__":
