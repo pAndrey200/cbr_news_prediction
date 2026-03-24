@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-worker
+  namespace: cbr-news
+  labels:
+    app: celery-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: celery-worker
+  template:
+    metadata:
+      labels:
+        app: celery-worker
+    spec:
+      containers:
+        - name: celery-worker
+          image: cbr-news:latest
+          imagePullPolicy: Never
+          command:
+            - celery
+            - -A
+            - cbr_news.workers.celery_app:celery_app
+            - worker
+            - --loglevel=info
+            - --concurrency=1
+            - --pool=solo
+          envFrom:
+            - configMapRef:
+                name: cbr-config
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: cbr-db-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cbr-db-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: cbr-db-secret
+                  key: POSTGRES_DB
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /app/checkpoints
+            - name: data
+              mountPath: /app/data
+              readOnly: true
+          resources:
+            requests:
+              memory: 4Gi
+              cpu: 500m
+            limits:
+              memory: 8Gi
+              cpu: 2000m
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: cbr-checkpoints-pvc
+        - name: data
+          persistentVolumeClaim:
+            claimName: cbr-data-pvc

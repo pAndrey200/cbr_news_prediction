@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bot
+  namespace: cbr-news
+  labels:
+    app: bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bot
+  template:
+    metadata:
+      labels:
+        app: bot
+    spec:
+      containers:
+        - name: bot
+          image: cbr-news:latest
+          imagePullPolicy: Never
+          command: ["python", "-m", "bot.main"]
+          env:
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cbr-telegram-secret
+                  key: TELEGRAM_BOT_TOKEN
+            - name: API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: cbr-config
+                  key: API_URL
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 50m
+            limits:
+              memory: 256Mi
+              cpu: 200m

@@ -1,0 +1,6 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cbr-news
+  labels:
+    app.kubernetes.io/part-of: cbr-news

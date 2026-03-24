@@ -1,0 +1,62 @@
+# Replaces the daemon-mode parser container from docker-compose.
+# Runs every 6 hours: syncs CBR news + economic indicators from the CBR site.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cbr-parser
+  namespace: cbr-news
+spec:
+  schedule: "0 */6 * * *" 
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: parser
+              image: cbr-news:latest
+              imagePullPolicy: Never
+              command:
+                - python
+                - -m
+                - cbr_news.parsing.sync_data
+                - --once
+                - --months-back
+                - "2"
+              envFrom:
+                - configMapRef:
+                    name: cbr-config
+              env:
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: cbr-db-secret
+                      key: POSTGRES_USER
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: cbr-db-secret
+                      key: POSTGRES_PASSWORD
+                - name: POSTGRES_DB
+                  valueFrom:
+                    secretKeyRef:
+                      name: cbr-db-secret
+                      key: POSTGRES_DB
+              volumeMounts:
+                - name: data
+                  mountPath: /app/data
+              resources:
+                requests:
+                  memory: 512Mi
+                  cpu: 100m
+                limits:
+                  memory: 1Gi
+                  cpu: 500m
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: cbr-data-pvc
