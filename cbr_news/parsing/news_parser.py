@@ -7,9 +7,15 @@ from pathlib import Path
 import httpx
 import pandas as pd
 from bs4 import BeautifulSoup
-from hydra.utils import get_original_cwd
-
 logger = logging.getLogger(__name__)
+
+
+def _get_project_root() -> Path:
+    try:
+        from hydra.utils import get_original_cwd
+        return Path(get_original_cwd())
+    except Exception:
+        return Path(__file__).parents[2]
 
 NEWS_TYPES = {
     "events": "https://www.cbr.ru/press/event/?id={}",
@@ -26,10 +32,7 @@ class CBRNewsParser:
         self.config = config
         self.use_database = use_database
 
-        try:
-            project_root = Path(get_original_cwd())
-        except (ValueError, AttributeError):
-            project_root = Path.cwd()
+        project_root = _get_project_root()
         self.data_dir = project_root / "data"
         self.data_dir.mkdir(exist_ok=True)
 

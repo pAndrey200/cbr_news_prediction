@@ -6,9 +6,7 @@ from pathlib import Path
 import httpx
 import pandas as pd
 from bs4 import BeautifulSoup
-from hydra.utils import get_original_cwd
-
-from cbr_news.parsing.news_parser import CBRNewsParser
+from cbr_news.parsing.news_parser import CBRNewsParser, _get_project_root
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +16,7 @@ class CBRDataParser:
         self.config = config
         self.use_database = use_database
 
-        try:
-            project_root = Path(get_original_cwd())
-        except (ValueError, AttributeError):
-            project_root = Path.cwd()
-        self.data_dir = project_root / "data"
+        self.data_dir = _get_project_root() / "data"
         self.data_dir.mkdir(exist_ok=True)
 
         try:
@@ -43,8 +37,7 @@ class CBRDataParser:
                     CurrencyRateRepository,
                     InflationRepository,
                     KeyRateRepository,
-                    PreciousMetalRepository,
-                    ReserveRepository,
+                    OilPriceRepository,
                     RuoniaRepository,
                 )
                 self.get_db_session = get_db_session
@@ -52,8 +45,7 @@ class CBRDataParser:
                 self.currency_repo = CurrencyRateRepository
                 self.inflation_repo = InflationRepository
                 self.ruonia_repo = RuoniaRepository
-                self.metal_repo = PreciousMetalRepository
-                self.reserve_repo = ReserveRepository
+                self.oil_repo = OilPriceRepository
             except Exception as e:
                 logger.error(f"Не удалось инициализировать подключение к БД: {e}")
                 self.use_database = False
@@ -182,12 +174,17 @@ class CBRDataParser:
             return
         try:
             with self.get_db_session() as session:
+                saved = 0
                 for _, row in df.iterrows():
-                    date_obj = self._parse_date_to_obj(row["date_inflation"])
-                    if not date_obj:
+                    date_str = str(row["date_inflation"])  # format: MM.YYYY
+                    try:
+                        parts = date_str.split(".")
+                        date_obj = datetime(int(parts[1]), int(parts[0]), 1).date()
+                    except Exception:
                         continue
                     self.inflation_repo.create_or_update(session, date_obj, float(row["inflation"]))
-                logger.info(f"Сохранено {len(df)} записей инфляции в БД")
+                    saved += 1
+                logger.info(f"Сохранено {saved} записей инфляции в БД")
         except Exception as e:
             logger.error(f"Ошибка при сохранении инфляции в БД: {e}")
 
@@ -205,41 +202,22 @@ class CBRDataParser:
         except Exception as e:
             logger.error(f"Ошибка при сохранении RUONIA в БД: {e}")
 
-    def _save_metals_to_db(self, df: pd.DataFrame):
+    def _save_oil_to_db(self, df: pd.DataFrame):
         if not self.use_database:
             return
         try:
             with self.get_db_session() as session:
+                saved = 0
                 for _, row in df.iterrows():
-                    date_obj = self._parse_date_to_obj(row["date"])
-                    if not date_obj:
+                    try:
+                        date_obj = datetime.strptime(str(row["date"])[:10], "%Y-%m-%d").date()
+                    except Exception:
                         continue
-                    for metal in ["gold", "silver", "platinum", "palladium"]:
-                        if metal in row and pd.notna(row[metal]):
-                            self.metal_repo.create_or_update(session, date_obj, metal, float(row[metal]))
-                logger.info(f"Сохранено {len(df)} записей драгметаллов в БД")
+                    self.oil_repo.create_or_update(session, date_obj, float(row["price"]))
+                    saved += 1
+                logger.info(f"Сохранено {saved} записей Brent в БД")
         except Exception as e:
-            logger.error(f"Ошибка при сохранении драгметаллов в БД: {e}")
-
-    def _save_reserves_to_db(self, df: pd.DataFrame):
-        if not self.use_database:
-            return
-        try:
-            with self.get_db_session() as session:
-                for _, row in df.iterrows():
-                    date_obj = self._parse_date_to_obj(row["date_reserves"])
-                    if not date_obj:
-                        continue
-                    self.reserve_repo.create_or_update(
-                        session,
-                        date_obj,
-                        reserves_corset=float(row["reserves_corset"]) if pd.notna(row.get("reserves_corset")) else None,
-                        reserves_avg=float(row["reserves_avg"]) if pd.notna(row.get("reserves_avg")) else None,
-                        reserves_accounts=float(row["reserves_accounts"]) if pd.notna(row.get("reserves_accounts")) else None,
-                    )
-                logger.info(f"Сохранено {len(df)} записей резервов в БД")
-        except Exception as e:
-            logger.error(f"Ошибка при сохранении резервов в БД: {e}")
+            logger.error(f"Ошибка при сохранении Brent в БД: {e}")
 
     def get_key_rate(self) -> pd.DataFrame:
         logger.info("Получение данных по ключевой ставке...")
@@ -272,8 +250,8 @@ class CBRDataParser:
 
     def get_inflation(self) -> pd.DataFrame:
         logger.info("Получение данных по инфляции...")
-        base_url = "https://www.cbr.ru/hd_base/infl/?UniDbQuery.Posted=True&UniDbQuery.From=17.09.2013"
-        response = httpx.get(base_url, headers=self.headers, timeout=10)
+        base_url = "https://www.cbr.ru/hd_base/infl/?UniDbQuery.Posted=True&UniDbQuery.From=17.09.2013&UniDbQuery.To=31.12.2030"
+        response = httpx.get(base_url, headers=self.headers, timeout=15)
         soup = BeautifulSoup(response.text, "html.parser")
 
         table = soup.find("table", attrs={"class": "data"})
@@ -368,73 +346,45 @@ class CBRDataParser:
             self._save_ruonia_to_db(df)
         return df
 
-    def get_precious_metals(self) -> pd.DataFrame:
-        logger.info("Получение учётных цен на драгоценные металлы...")
-        base_url = "https://www.cbr.ru/hd_base/metall/metall_base_new/"
-        try:
-            response = httpx.get(base_url, headers=self.headers, timeout=15)
-            soup = BeautifulSoup(response.text, "html.parser")
-            table = soup.find("table", attrs={"class": "data"})
-            if not table:
-                return pd.DataFrame(columns=["date", "gold", "silver", "platinum", "palladium"])
-            data = []
-            for row in table.find_all("tr")[1:]:
-                cols = row.find_all("td")
-                if len(cols) < 5:
-                    continue
-                date_str = cols[0].get_text(strip=True)
-                vals = []
-                for c in cols[1:5]:
-                    s = c.get_text(strip=True).replace("\xa0", "").replace(" ", "").replace(",", ".")
-                    try:
-                        vals.append(float(s))
-                    except ValueError:
-                        vals.append(float("nan"))
-                data.append([date_str] + vals)
-            df = pd.DataFrame(data, columns=["date", "gold", "silver", "platinum", "palladium"])
-        except Exception as e:
-            logger.warning("Ошибка парсинга драгметаллов: %s", e)
-            df = pd.DataFrame(columns=["date", "gold", "silver", "platinum", "palladium"])
-        df.to_csv(self.data_dir / "metall-cbr.csv", index=False)
-        logger.info(f"Сохранено {len(df)} записей по драгметаллам")
-        if len(df) > 0:
-            self._save_metals_to_db(df)
-        return df
+    def get_brent_oil(self) -> pd.DataFrame:
+        """Получение дневных цен на нефть Brent (USD/barrel) через FX Empire API.
 
-    def get_reserves(self) -> pd.DataFrame:
-        logger.info("Получение данных по обязательным резервам...")
-        base_url = "https://www.cbr.ru/hd_base/RReserves/"
-        try:
-            response = httpx.get(base_url, headers=self.headers, timeout=15)
-            soup = BeautifulSoup(response.text, "html.parser")
-            table = soup.find("table", attrs={"class": "data"})
-            if not table:
-                return pd.DataFrame(columns=["date_reserves", "reserves_avg", "reserves_accounts"])
-            data = []
-            for row in table.find_all("tr")[1:]:
-                cols = row.find_all("td")
-                if len(cols) < 4:
-                    continue
-                date_str = cols[0].get_text(strip=True)
-                vals = []
-                for c in cols[1:4]:
-                    s = c.get_text(strip=True).replace("\xa0", "").replace(" ", "").replace(",", ".")
-                    if s == "\u2014" or not s:
-                        vals.append(float("nan"))
-                    else:
-                        try:
-                            vals.append(float(s))
-                        except ValueError:
-                            vals.append(float("nan"))
-                data.append([date_str] + vals)
-            df = pd.DataFrame(data, columns=["date_reserves", "reserves_corset", "reserves_avg", "reserves_accounts"])
-        except Exception as e:
-            logger.warning("Ошибка парсинга резервов: %s", e)
-            df = pd.DataFrame(columns=["date_reserves", "reserves_avg", "reserves_accounts"])
-        df.to_csv(self.data_dir / "reserves-cbr.csv", index=False)
-        logger.info(f"Сохранено {len(df)} записей по резервам")
+        API ограничивает диапазон запроса, поэтому данные загружаются годовыми чанками.
+        """
+        logger.info("Получение цен на нефть Brent...")
+        base_url = (
+            "https://www.fxempire.com/api/v1/en/commodities/history/brent-crude-oil"
+            "?slug=brent-crude-oil&period=daily"
+        )
+        all_data = []
+        start_year = 2013
+        end_year = datetime.now().year
+
+        for year in range(start_year, end_year + 1):
+            chunk_start = f"{year}-01-01"
+            chunk_end = f"{year}-12-31"
+            url = f"{base_url}&start={chunk_start}&end={chunk_end}"
+            try:
+                response = httpx.get(url, headers=self.headers, timeout=30)
+                payload = response.json()
+                records = payload.get("data", [])
+                for rec in records:
+                    raw_date = rec.get("date", "")
+                    close = rec.get("close")
+                    if not raw_date or close is None:
+                        continue
+                    all_data.append({"date": str(raw_date)[:10], "price": float(close)})
+                logger.info(f"  {year}: {len(records)} записей")
+            except Exception as e:
+                logger.warning("Ошибка получения Brent за %d: %s", year, e)
+
+        df = pd.DataFrame(all_data) if all_data else pd.DataFrame(columns=["date", "price"])
+        if not df.empty:
+            df = df.drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
+        df.to_csv(self.data_dir / "brent-oil.csv", index=False)
+        logger.info(f"Сохранено {len(df)} записей Brent")
         if len(df) > 0:
-            self._save_reserves_to_db(df)
+            self._save_oil_to_db(df)
         return df
 
     def preprocess_data(self, df_releases: pd.DataFrame) -> pd.DataFrame:
@@ -486,6 +436,7 @@ class CBRDataParser:
             ("eur", "cur-eur-cbr.csv", "date", {"date": "date_eur", "eur": "eur"}),
             ("cny", "cur-cny-cbr.csv", "date", {"date": "date_cny", "cny": "cny"}),
             ("ruonia", "ruonia-cbr.csv", "date", {"date": "date_ruonia", "ruonia": "ruonia"}),
+            ("brent", "brent-oil.csv", "date", {"date": "date_brent", "price": "brent"}),
         ]:
             p = self.data_dir / fname
             if p.exists():
@@ -499,26 +450,6 @@ class CBRDataParser:
                 except Exception as e:
                     logger.warning("Не удалось загрузить %s: %s", fname, e)
 
-        df_metall = None
-        if (self.data_dir / "metall-cbr.csv").exists():
-            try:
-                df_metall = pd.read_csv(self.data_dir / "metall-cbr.csv", dtype=str)
-                for c in ["gold", "silver", "platinum", "palladium"]:
-                    if c in df_metall.columns:
-                        df_metall[c] = pd.to_numeric(df_metall[c], errors="coerce")
-                df_metall = df_metall.rename(columns={"date": "date_metall"})
-            except Exception as e:
-                logger.warning("Не удалось загрузить metall-cbr.csv: %s", e)
-
-        df_reserves = None
-        if (self.data_dir / "reserves-cbr.csv").exists():
-            try:
-                df_reserves = pd.read_csv(self.data_dir / "reserves-cbr.csv", dtype=str)
-                for c in ["reserves_avg", "reserves_accounts"]:
-                    if c in df_reserves.columns:
-                        df_reserves[c] = pd.to_numeric(df_reserves[c], errors="coerce")
-            except Exception as e:
-                logger.warning("Не удалось загрузить reserves-cbr.csv: %s", e)
 
         def get_month(date_str):
             try:
@@ -542,31 +473,21 @@ class CBRDataParser:
             df_merged = pd.merge(df_merged, df_extra, left_on="date_parsed", right_on=date_col, how="left", suffixes=("", "_drop"))
             df_merged = df_merged.drop(columns=[date_col], errors="ignore")
 
-        if df_metall is not None and "date_metall" in df_metall.columns:
-            df_merged = pd.merge(df_merged, df_metall, left_on="date_parsed", right_on="date_metall", how="left")
-            df_merged = df_merged.drop(columns=["date_metall"], errors="ignore")
-
-        if df_reserves is not None and "date_reserves" in df_reserves.columns:
-            df_merged = pd.merge(df_merged, df_reserves, left_on="date_parsed", right_on="date_reserves", how="left")
-            df_merged = df_merged.drop(columns=["date_reserves"], errors="ignore")
-
         df_merged = df_merged.drop(columns=["date_usd", "date_keyrate", "date"], errors="ignore")
         drop_cols = [c for c in df_merged.columns if c.endswith("_drop")]
         df_merged = df_merged.drop(columns=drop_cols, errors="ignore")
         df_merged = df_merged.rename(columns={"date_parsed": "date"})
 
         columns_to_keep = [
-            "date", "link", "title", "release",
-            "inflation", "usd", "eur", "cny", "key_rate", "ruonia",
-            "gold", "silver", "platinum", "palladium",
-            "reserves_avg", "reserves_accounts", "reserves_corset",
+            "date", "link", "title", "release", "news_type",
+            "inflation", "usd", "eur", "cny", "key_rate", "ruonia", "brent",
         ]
         df_merged = df_merged[[col for col in columns_to_keep if col in df_merged.columns]]
 
         if df_merged.columns.duplicated().any():
             df_merged = df_merged.loc[:, ~df_merged.columns.duplicated()]
 
-        for col in ["usd", "inflation", "eur", "cny", "ruonia", "gold", "silver", "platinum", "palladium", "reserves_avg", "reserves_accounts", "reserves_corset"]:
+        for col in ["usd", "inflation", "eur", "cny", "ruonia", "brent"]:
             if col in df_merged.columns:
                 df_merged[col] = df_merged[col].ffill().bfill()
 
@@ -618,21 +539,21 @@ class CBRDataParser:
             data = []
             for n in news_list:
                 data.append({
-                    "date": n.date.strftime("%d.%m.%Y") if n.date else "",
-                    "link": n.link,
-                    "title": n.title,
-                    "release": n.content or "",
+                    "date":      n.date.strftime("%d.%m.%Y") if n.date else "",
+                    "link":      n.link,
+                    "title":     n.title,
+                    "release":   n.content or "",
+                    "news_type": n.news_type or "news",
                 })
             logger.info(f"Загружено {len(data)} новостей из БД")
-            return pd.DataFrame(data, columns=["date", "link", "title", "release"])
+            return pd.DataFrame(data, columns=["date", "link", "title", "release", "news_type"])
 
     def _load_numeric_from_db(self):
         from cbr_news.database.repository import (
             CurrencyRateRepository,
             InflationRepository,
             KeyRateRepository,
-            PreciousMetalRepository,
-            ReserveRepository,
+            OilPriceRepository,
             RuoniaRepository,
         )
 
@@ -659,7 +580,7 @@ class CBRDataParser:
 
             inflation_list = InflationRepository.get_all(session)
             df_inflation = pd.DataFrame(
-                [{"date_inflation": r.date.strftime("%d.%m.%Y"), "inflation": r.value} for r in inflation_list]
+                [{"date_inflation": r.date.strftime("%m.%Y"), "inflation": r.value} for r in inflation_list]
             ) if inflation_list else pd.DataFrame(columns=["date_inflation", "inflation"])
 
             ruonia_list = RuoniaRepository.get_all(session)
@@ -667,27 +588,13 @@ class CBRDataParser:
                 [{"date": r.date.strftime("%d.%m.%Y"), "ruonia": r.rate} for r in ruonia_list]
             ) if ruonia_list else pd.DataFrame(columns=["date", "ruonia"])
 
-            metals_list = PreciousMetalRepository.get_all(session)
-            metals_data = {}
-            for m in metals_list:
-                key = m.date.strftime("%d.%m.%Y")
-                if key not in metals_data:
-                    metals_data[key] = {"date": key}
-                metals_data[key][m.metal_type] = m.price
-            df_metall = pd.DataFrame(list(metals_data.values())) if metals_data else pd.DataFrame(columns=["date", "gold", "silver", "platinum", "palladium"])
-
-            reserves_list = ReserveRepository.get_all(session)
-            df_reserves = pd.DataFrame(
-                [{
-                    "date_reserves": r.date.strftime("%d.%m.%Y"),
-                    "reserves_corset": r.reserves_corset,
-                    "reserves_avg": r.reserves_avg,
-                    "reserves_accounts": r.reserves_accounts,
-                } for r in reserves_list]
-            ) if reserves_list else pd.DataFrame(columns=["date_reserves", "reserves_corset", "reserves_avg", "reserves_accounts"])
+            oil_list = OilPriceRepository.get_all(session)
+            df_brent = pd.DataFrame(
+                [{"date": r.date.strftime("%d.%m.%Y"), "brent": r.price} for r in oil_list]
+            ) if oil_list else pd.DataFrame(columns=["date", "brent"])
 
         logger.info("Все числовые данные загружены из БД")
-        return df_key_rates, df_usd, df_eur, df_cny, df_inflation, df_ruonia, df_metall, df_reserves
+        return df_key_rates, df_usd, df_eur, df_cny, df_inflation, df_ruonia, df_brent
 
     def _run_parsing(self) -> pd.DataFrame:
         logger.info("Режим парсинга: сбор данных с сайта ЦБ...")
@@ -710,11 +617,8 @@ class CBRDataParser:
         logger.info("5. Получение ставки RUONIA...")
         self.get_ruonia()
 
-        logger.info("6. Получение учётных цен на драгоценные металлы...")
-        self.get_precious_metals()
-
-        logger.info("7. Получение данных по обязательным резервам...")
-        self.get_reserves()
+        logger.info("6. Получение цен на нефть Brent...")
+        self.get_brent_oil()
 
         return df_all_news
 
@@ -763,7 +667,7 @@ class CBRDataParser:
         df_releases["date_parsed"] = df_releases["date"]
         df_releases = df_releases.dropna(subset=["date_parsed"])
 
-        df_key_rates, df_usd, df_eur, df_cny, df_inflation, df_ruonia, df_metall, df_reserves = self._load_numeric_from_db()
+        df_key_rates, df_usd, df_eur, df_cny, df_inflation, df_ruonia, df_brent = self._load_numeric_from_db()
 
         def get_month(date_str):
             try:
@@ -799,6 +703,7 @@ class CBRDataParser:
             ("eur", df_eur, {"date": "date_eur"}),
             ("cny", df_cny, {"date": "date_cny"}),
             ("ruonia", df_ruonia, {"date": "date_ruonia"}),
+            ("brent", df_brent, {"date": "date_brent"}),
         ]:
             date_col = f"date_{name}"
             df_extra = df_extra.rename(columns=rename_map)
@@ -806,32 +711,21 @@ class CBRDataParser:
                 df_merged = pd.merge(df_merged, df_extra, left_on="date_parsed", right_on=date_col, how="left", suffixes=("", "_drop"))
                 df_merged = df_merged.drop(columns=[date_col], errors="ignore")
 
-        if not df_metall.empty:
-            df_metall = df_metall.rename(columns={"date": "date_metall"})
-            df_merged = pd.merge(df_merged, df_metall, left_on="date_parsed", right_on="date_metall", how="left")
-            df_merged = df_merged.drop(columns=["date_metall"], errors="ignore")
-
-        if not df_reserves.empty:
-            df_merged = pd.merge(df_merged, df_reserves, left_on="date_parsed", right_on="date_reserves", how="left")
-            df_merged = df_merged.drop(columns=["date_reserves"], errors="ignore")
-
         df_merged = df_merged.drop(columns=["date_usd", "date_keyrate", "date"], errors="ignore")
         drop_cols = [c for c in df_merged.columns if c.endswith("_drop")]
         df_merged = df_merged.drop(columns=drop_cols, errors="ignore")
         df_merged = df_merged.rename(columns={"date_parsed": "date"})
 
         columns_to_keep = [
-            "date", "link", "title", "release",
-            "inflation", "usd", "eur", "cny", "key_rate", "ruonia",
-            "gold", "silver", "platinum", "palladium",
-            "reserves_avg", "reserves_accounts", "reserves_corset",
+            "date", "link", "title", "release", "news_type",
+            "inflation", "usd", "eur", "cny", "key_rate", "ruonia", "brent",
         ]
         df_merged = df_merged[[col for col in columns_to_keep if col in df_merged.columns]]
 
         if df_merged.columns.duplicated().any():
             df_merged = df_merged.loc[:, ~df_merged.columns.duplicated()]
 
-        for col in ["usd", "inflation", "eur", "cny", "ruonia", "gold", "silver", "platinum", "palladium", "reserves_avg", "reserves_accounts", "reserves_corset"]:
+        for col in ["usd", "inflation", "eur", "cny", "ruonia", "brent"]:
             if col in df_merged.columns:
                 df_merged[col] = df_merged[col].ffill().bfill()
 
@@ -864,7 +758,7 @@ class CBRDataParser:
         df_processed = df_processed.sort_values("date").reset_index(drop=True)
 
         auxiliary_params = ['usd', 'eur', 'cny', 'key_rate']
-        columns_to_keep = ['date', 'release', 'target']
+        columns_to_keep = ['date', 'release', 'news_type', 'target']
         for param in auxiliary_params:
             label_col = f'{param}_label'
             if label_col in df_processed.columns:

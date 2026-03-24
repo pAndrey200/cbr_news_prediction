@@ -251,6 +251,23 @@ class CBRNewsDataLoader:
         except (ValueError, AttributeError):
             project_root = Path.cwd()
 
+        # Use combined dataset if configured, otherwise fall back to default
+        combined_path_str = None
+        try:
+            combined_path_str = self.config.data.multitask_dataset_path
+        except (AttributeError, KeyError):
+            pass
+
+        if combined_path_str:
+            combined_path = project_root / combined_path_str
+            if combined_path.exists():
+                logger.info(f"Загрузка объединённого датасета: {combined_path}")
+                df = pd.read_csv(combined_path)
+                logger.info(f"Загружено {len(df)} записей из объединённого датасета")
+                return df
+            else:
+                logger.warning(f"Файл {combined_path} не найден, использую стандартный датасет")
+
         multitask_path = project_root / "data" / "cbr_multitask_dataset.csv"
 
         if run_parser and multitask_path.exists() and not force_download:
