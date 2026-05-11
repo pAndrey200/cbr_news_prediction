@@ -1,16 +1,8 @@
 """ML модели для предсказания экономических показателей."""
 
+from cbr_news.ml.models.joint_model import JointBertTabularModel, get_gru_feature_info
+
 __all__ = [
-    "CBRNewsModel",
-    "CBRNewsMultiTaskModel",
+    "JointBertTabularModel",
+    "get_gru_feature_info",
 ]
-
-
-def __getattr__(name: str):
-    if name == "CBRNewsModel":
-        from cbr_news.ml.models.base_model import CBRNewsModel
-        return CBRNewsModel
-    if name == "CBRNewsMultiTaskModel":
-        from cbr_news.ml.models.multitask_model import CBRNewsMultiTaskModel
-        return CBRNewsMultiTaskModel
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
