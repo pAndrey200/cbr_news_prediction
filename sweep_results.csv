@@ -1,9 +1,0 @@
-run_idx,backbone,pool_mode,dataset,n_trainable,lr,cbr_weight,oversample_up,label_smoothing,threshold,tab_arch,train_end,val_end,dropout,max_length,batch_size,epochs_trained,best_val_f1_macro,best_val_f1,test_f1,test_f1_macro,test_acc,elapsed_min
-1,ai-forever/ruBert-base,cls,combined_t025,4,0.0002,3.0,2,0.1,0.25,mlp_deep,2024-06-30,2024-12-31,0.3,256,128,9,0.4492,0.5742,0.3917,0.2589,0.3247,25.7
-2,ai-forever/ruBert-base,cls,combined_t025,4,0.0005,3.0,2,0.1,0.25,mlp_deep,2024-06-30,2024-12-31,0.3,256,128,7,0.4691,0.6124,0.4768,0.2883,0.3936,20.0
-3,ai-forever/ruBert-base,mean,combined_t025,4,0.0002,3.0,2,0.1,0.25,mlp_deep,2024-06-30,2024-12-31,0.3,256,128,10,0.4642,0.5968,0.4324,0.2629,0.3629,28.6
-4,ai-forever/ruBert-base,mean,combined_t025,4,0.0005,3.0,2,0.1,0.25,mlp_deep,2024-06-30,2024-12-31,0.3,256,128,7,0.4869,0.6153,0.4796,0.2899,0.4028,20.3
-5,DeepPavlov/rubert-base-cased,cls,combined_t025,4,0.0002,3.0,2,0.1,0.25,mlp_deep,2024-06-30,2024-12-31,0.3,256,128,10,0.467,0.602,0.5492,0.3212,0.4717,28.4
-6,DeepPavlov/rubert-base-cased,cls,combined_t025,4,0.0005,3.0,2,0.1,0.25,mlp_deep,2024-06-30,2024-12-31,0.3,256,128,9,0.4807,0.624,0.57,0.3097,0.4977,25.5
-7,DeepPavlov/rubert-base-cased,mean,combined_t025,4,0.0002,3.0,2,0.1,0.25,mlp_deep,2024-06-30,2024-12-31,0.3,256,128,10,0.4684,0.6026,0.4656,0.2846,0.3936,28.5
-8,DeepPavlov/rubert-base-cased,mean,combined_t025,4,0.0005,3.0,2,0.1,0.25,mlp_deep,2024-06-30,2024-12-31,0.3,256,128,10,0.4654,0.5939,0.4421,0.2679,0.3706,28.1
