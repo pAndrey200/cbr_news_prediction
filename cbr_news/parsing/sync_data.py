@@ -116,7 +116,6 @@ def run_once(months_back: int = 2) -> None:
 
     sync_news(months_back=months_back)
     sync_indicators()
-    invalidate_caches()
 
     elapsed = (datetime.now() - start).total_seconds()
     logger.info("=== Data sync finished in %.0fs ===", elapsed)

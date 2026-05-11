@@ -162,6 +162,7 @@ class CBRNewsParser:
                     "Tid": "",
                     "vol": "",
                     "phrase": "",
+                    "pagesize": BATCH_SIZE,
                 }
                 response = httpx.get(base_url, params=params, headers=self.headers, timeout=30)
 

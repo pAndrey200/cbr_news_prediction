@@ -34,6 +34,12 @@ def _resolve_checkpoint(path: str) -> str:
 
 def _default_checkpoint_path() -> str:
     """Возвращает путь к чекпоинту из переменных окружения."""
+    # BEST_CHECKPOINT has highest priority
+    best = os.environ.get("BEST_CHECKPOINT")
+    if best:
+        resolved = _resolve_checkpoint(best)
+        if resolved:
+            return resolved
     env_path = os.environ.get("CHECKPOINT_PATH")
     if env_path:
         resolved = _resolve_checkpoint(env_path)
@@ -205,7 +211,7 @@ def run_prediction(self, task_id: str, params: dict):
         config_path = params.get("config_path")
         logger.info("Используется чекпоинт: %s", checkpoint_path)
 
-        from cbr_news.inference import CBRNewsPredictor
+        from cbr_news.ml.inference import CBRNewsPredictor
 
         predictor = CBRNewsPredictor(
             checkpoint_path=checkpoint_path,

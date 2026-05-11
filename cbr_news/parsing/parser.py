@@ -360,9 +360,10 @@ class CBRDataParser:
         start_year = 2013
         end_year = datetime.now().year
 
+        today = datetime.now().date()
         for year in range(start_year, end_year + 1):
             chunk_start = f"{year}-01-01"
-            chunk_end = f"{year}-12-31"
+            chunk_end = today.strftime("%Y-%m-%d") if year == end_year else f"{year}-12-31"
             url = f"{base_url}&start={chunk_start}&end={chunk_end}"
             try:
                 response = httpx.get(url, headers=self.headers, timeout=30)

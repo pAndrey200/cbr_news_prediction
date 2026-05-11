@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cbr_news.database.db import get_async_db
 from cbr_news.database.models import TaskStatus, TaskType
 from cbr_news.database.task_repository import TaskRepositoryAsync
-from cbr_news.workers.tasks import run_prediction, run_training, _default_checkpoint_path
+from cbr_news.workers.tasks import run_prediction, run_training
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -89,19 +89,9 @@ async def create_prediction_task(
     db: AsyncSession = Depends(get_async_db),
 ):
     """Создать задачу на батч-предсказание."""
-    from cbr_news.tasks import _resolve_checkpoint
-    checkpoint = (
-        _resolve_checkpoint(request.checkpoint_path)
-        if request.checkpoint_path
-        else _default_checkpoint_path()
-    )
-    if not checkpoint:
-        raise HTTPException(
-            422,
-            "Чекпоинт модели не найден. Обучите модель через POST /tasks/train"
-        )
-
-    params = {"texts": request.texts, "checkpoint_path": checkpoint}
+    params: dict = {"texts": request.texts}
+    if request.checkpoint_path:
+        params["checkpoint_path"] = request.checkpoint_path
     if request.config_path:
         params["config_path"] = request.config_path
 

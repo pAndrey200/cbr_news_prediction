@@ -1,10 +1,25 @@
 import asyncio
 import logging
 import os
+from html import escape
 
 import httpx
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    Update,
+)
+from telegram.constants import ParseMode
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 from telegram.request import HTTPXRequest
 
 logging.basicConfig(
@@ -15,15 +30,22 @@ logger = logging.getLogger(__name__)
 
 API_BASE = os.environ.get("API_URL", "http://localhost:8000")
 
-LABELS = {"down": "⬇️ Снижение", "same": "➡️ Без изменений", "up": "⬆️ Повышение"}
+LABELS = {"down": "⬇️", "same": "➡️", "up": "⬆️"}
+LABELS_RU = {"down": "⬇️ Снижение RUONIA", "same": "➡️ Без изменений", "up": "⬆️ Повышение RUONIA"}
 RATE_LABELS = {"cut": "⬇️ Снижение ставки", "hold": "➡️ Без изменений", "hike": "⬆️ Повышение ставки"}
-TONE_LABELS = {"hawkish": "ястребиный (→ повышение)", "dovish": "голубиный (→ снижение)", "neutral": "нейтральный"}
-STATUS_ICONS = {
-    "pending": "🕐",
-    "running": "⚙️",
-    "completed": "✅",
-    "failed": "❌",
-}
+STATUS_ICONS = {"pending": "🕐", "running": "⚙️", "completed": "✅", "failed": "❌"}
+
+# Постоянная нижняя клавиатура
+REPLY_KB = ReplyKeyboardMarkup(
+    [[KeyboardButton("📊 Анализ")]],
+    resize_keyboard=True,
+    is_persistent=True,
+)
+
+# Инлайн-кнопка под результатом анализа
+KB_REFRESH = InlineKeyboardMarkup(
+    [[InlineKeyboardButton("🔄 Обновить", callback_data="full_predict")]]
+)
 
 
 async def _api_get(path: str, params: dict = None, timeout: float = 15.0) -> dict:
@@ -41,7 +63,6 @@ async def _api_post(path: str, json: dict, timeout: float = 15.0) -> dict:
 
 
 async def _poll_task(task_id: str, max_wait: float = 60.0, interval: float = 2.0) -> dict:
-    """Опрашивает статус задачи до завершения или таймаута."""
     elapsed = 0.0
     while elapsed < max_wait:
         data = await _api_get(f"/tasks/{task_id}")
@@ -52,188 +73,133 @@ async def _poll_task(task_id: str, max_wait: float = 60.0, interval: float = 2.0
     return await _api_get(f"/tasks/{task_id}")
 
 
-def _format_prediction_result(task: dict) -> str:
-    """Форматирует результат задачи предсказания."""
-    if task["status"] == "failed":
-        return f"❌ Ошибка при выполнении задачи:\n{task.get('error', 'неизвестная ошибка')[:300]}"
+def _fmt_date(iso: str) -> str:
+    try:
+        y, m, d = iso[:10].split("-")
+        return f"{d}.{m}.{y}"
+    except Exception:
+        return iso[:10]
 
-    if task["status"] != "completed":
-        icon = STATUS_ICONS.get(task["status"], "🔄")
-        return f"{icon} Задача ещё выполняется (ID: {task['id']})\nПроверьте статус: /status {task['id']}"
 
-    result = task.get("result") or {}
-    preds = result.get("predictions", [])
-    if not preds:
-        return "Нет результатов от модели."
+async def _run_full_predict(message) -> None:
+    """Полный анализ: прогноз ставки + индикаторы + новости с RUONIA-сигналами."""
+    rate_data, ind, news_resp = await asyncio.gather(
+        _api_get("/predict_key_rate", timeout=120.0),
+        _api_get("/indicators", timeout=15.0),
+        _api_get("/news", params={"limit": 10}, timeout=15.0),
+        return_exceptions=True,
+    )
 
-    lines = []
-    for i, p in enumerate(preds, 1):
-        pred = p.get("prediction", "?")
-        probs = p.get("probabilities", {})
-        pred_ru = LABELS.get(pred, pred)
-        prob_str = ", ".join(f"{LABELS.get(k, k)}: {v:.0%}" for k, v in probs.items())
-        text_preview = (p.get("text") or "")[:60]
-        if len(p.get("text") or "") > 60:
-            text_preview += "..."
+    if isinstance(rate_data, httpx.HTTPStatusError) and rate_data.response.status_code == 503:
+        await message.reply_text("Модель не загружена. Попробуйте позже.")
+        return
+    if isinstance(rate_data, Exception):
+        logger.exception("Ошибка predict_key_rate: %s", rate_data)
+        await message.reply_text("Не удалось получить прогноз. Попробуйте позже.")
+        return
 
-        if len(preds) == 1:
-            lines.append(f"Предсказание: {pred_ru}")
-            lines.append(f"Вероятности: {prob_str}")
-            aux = p.get("auxiliary_predictions", {})
-            if aux:
-                lines.append("\nВспомогательные предсказания:")
-                for task_name, aux_pred in aux.items():
-                    aux_label = LABELS.get(aux_pred.get("prediction", "?"), aux_pred.get("prediction", "?"))
-                    lines.append(f"  {task_name.upper()}: {aux_label}")
-        else:
-            lines.append(f"{i}. {text_preview} → {LABELS.get(pred, pred)}")
+    # RUONIA-сигналы по последним новостям через Celery
+    news_list = news_resp.get("news", []) if isinstance(news_resp, dict) else []
+    ruonia_labels: list[str] = []
+    if news_list:
+        texts = [n.get("text") or n.get("title") or "" for n in news_list]
+        texts = [t for t in texts if t]
+        try:
+            task = await _api_post("/tasks/predict", json={"texts": texts})
+            result = await _poll_task(task["id"], max_wait=60.0)
+            if result["status"] == "completed":
+                preds = (result.get("result") or {}).get("predictions", [])
+                ruonia_labels = [p.get("prediction", "same") for p in preds]
+        except Exception as e:
+            logger.warning("RUONIA predictions failed: %s", e)
 
-    return "\n".join(lines)
+    pred = rate_data.get("prediction", "?")
+    current = rate_data.get("current_rate", 0)
+    n_articles = rate_data.get("n_articles", 0)
+    pred_ru = RATE_LABELS.get(pred, pred)
+
+    lines = [
+        "📊 <b>АНАЛИТИКА ЦБ РФ</b>",
+        "",
+        f"🏦 <b>Прогноз ставки:</b> {escape(pred_ru)}",
+        f"Текущая ставка: <b>{current:.1f}%</b>",
+        f"<i>Проанализировано статей: {n_articles}</i>",
+    ]
+
+    if isinstance(ind, dict) and ind:
+        lines.append("")
+        lines.append("📈 <b>Рыночные данные</b>")
+        for key, label, fmt in (
+            ("USD",       "USD",        lambda v: f"{v:.2f} ₽"),
+            ("EUR",       "EUR",        lambda v: f"{v:.2f} ₽"),
+            ("CNY",       "CNY",        lambda v: f"{v:.2f} ₽"),
+            ("ruonia",    "RUONIA",     lambda v: f"{v:.2f}%"),
+            ("inflation", "Инфляция",   lambda v: f"{v:.1f}%"),
+            ("brent",     "Brent",      lambda v: f"${v:.1f}"),
+        ):
+            if key in ind:
+                lines.append(
+                    f"{label}   <b>{fmt(ind[key]['value'])}</b>"
+                    f"  <i>({_fmt_date(ind[key]['date'])})</i>"
+                )
+
+    if news_list:
+        lines.append("")
+        lines.append("📰 <b>Последние новости ЦБ</b>")
+        for i, item in enumerate(news_list):
+            title = (item.get("title") or "").strip()
+            link = (item.get("link") or "").strip()
+            if not title:
+                continue
+            icon = LABELS.get(ruonia_labels[i], "") if i < len(ruonia_labels) else ""
+            if link:
+                lines.append(f'{icon} <a href="{escape(link)}">{escape(title)}</a>')
+            else:
+                lines.append(f"{icon} {escape(title)}")
+
+    await message.reply_text(
+        "\n".join(lines),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+        reply_markup=KB_REFRESH,
+    )
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Привет! Я бот для анализа монетарной политики ЦБ РФ.\n\n"
-        "Команды:\n"
-        "/predict_news [N] — направление RUONIA по последним N новостям\n"
-        "/rate — прогноз ключевой ставки на следующем заседании\n"
-        "/predict <текст> — предсказание RUONIA по тексту\n"
-        "/status <task_id> — проверить статус задачи\n\n"
-        "Или просто отправьте текст новости — верну предсказание."
+        "Нажмите <b>📊 Анализ</b> для полного отчёта:\n"
+        "прогноз ставки, рыночные данные, сигналы по новостям.\n\n"
+        "Или отправьте текст новости — оценю её сигнал.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=REPLY_KB,
     )
-
-
-async def cmd_predict_news(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    limit = 5
-    if context.args and context.args[0].isdigit():
-        limit = max(1, min(int(context.args[0]), 20))
-
-    await update.message.reply_text("🔄 Получаю последние новости...")
-
-    try:
-        news_data = await _api_get("/news", params={"limit": limit})
-    except httpx.HTTPStatusError as e:
-        await update.message.reply_text(f"Ошибка получения новостей: {e.response.status_code}")
-        return
-    except Exception as e:
-        logger.exception("Ошибка запроса новостей: %s", e)
-        await update.message.reply_text("Не удалось получить новости. Попробуйте позже.")
-        return
-
-    news = news_data.get("news", [])
-    if not news:
-        await update.message.reply_text("Нет доступных новостей.")
-        return
-
-    texts = [n.get("text") or n.get("title") or "" for n in news]
-    texts = [t for t in texts if t]
-
-    try:
-        task = await _api_post("/tasks/predict", json={"texts": texts})
-    except httpx.HTTPStatusError as e:
-        await update.message.reply_text(f"Ошибка при создании задачи: {e.response.status_code}")
-        return
-    except Exception as e:
-        logger.exception("Ошибка создания задачи: %s", e)
-        await update.message.reply_text("Не удалось поставить задачу в очередь.")
-        return
-
-    task_id = task["id"]
-    await update.message.reply_text(f"⏳ Задача в очереди (ID: {task_id})\nЖду результат...")
-
-    result = await _poll_task(task_id)
-
-    if result["status"] == "completed":
-        preds_list = (result.get("result") or {}).get("predictions", [])
-        pred_labels = [p.get("prediction", "?") for p in preds_list]
-        summary = {k: pred_labels.count(k) for k in ("down", "same", "up")}
-        rec = max(summary, key=summary.get)
-
-        lines = [
-            f"Итог по {len(pred_labels)} новостям:",
-            f"Рекомендация: {LABELS.get(rec, rec)}",
-            "",
-            "По каждой новости:",
-        ]
-        for i, (news_item, pred) in enumerate(zip(news[:10], preds_list[:10]), 1):
-            title = (news_item.get("title") or "")[:60]
-            if len(news_item.get("title") or "") > 60:
-                title += "..."
-            p = pred.get("prediction", "?")
-            lines.append(f"{i}. {title} → {LABELS.get(p, p)}")
-        await update.message.reply_text("\n".join(lines))
-    else:
-        await update.message.reply_text(_format_prediction_result(result))
-
-
-async def cmd_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Прогноз ключевой ставки на следующем заседании ЦБ."""
-    await update.message.reply_text("🔄 Анализирую последние новости для прогноза ключевой ставки...")
-
-    try:
-        data = await _api_get("/predict_key_rate", params={"limit": 20}, timeout=120.0)
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 503:
-            await update.message.reply_text("Модель не загружена. Попробуйте позже.")
-        else:
-            await update.message.reply_text(f"Ошибка API: {e.response.status_code}")
-        return
-    except Exception as e:
-        logger.exception("Ошибка прогноза ставки: %s", e)
-        await update.message.reply_text("Не удалось получить прогноз. Попробуйте позже.")
-        return
-
-    pred = data.get("prediction", "?")
-    probs = data.get("probabilities", {})
-    signal = data.get("signal", {})
-    current = data.get("current_rate", 0)
-    expected = data.get("expected_rate", 0)
-    n_articles = data.get("n_articles", 0)
-
-    pred_ru = RATE_LABELS.get(pred, pred)
-    tone = TONE_LABELS.get(signal.get("tone", ""), "")
-
-    lines = [
-        "📊 ПРОГНОЗ КЛЮЧЕВОЙ СТАВКИ ЦБ РФ",
-        "",
-        f"Прогноз: {pred_ru}",
-        f"Текущая ставка: {current:.1f}%",
-        f"Ожидаемый уровень: {expected:.1f}%",
-        "",
-        "Вероятности:",
-        f"  Снижение: {probs.get('cut', 0):.0%}",
-        f"  Без изменений: {probs.get('hold', 0):.0%}",
-        f"  Повышение: {probs.get('hike', 0):.0%}",
-    ]
-
-    if signal:
-        lines.extend([
-            "",
-            f"Тон новостей: {tone}",
-            f"Статей проанализировано: {n_articles}",
-        ])
-        n_hike = signal.get("articles_hike", 0)
-        n_hold = signal.get("articles_hold", 0)
-        n_cut = signal.get("articles_cut", 0)
-        if n_hike or n_hold or n_cut:
-            lines.append(f"  ↑ повышение: {n_hike}  → нейтрально: {n_hold}  ↓ снижение: {n_cut}")
-
-    await update.message.reply_text("\n".join(lines))
 
 
 async def cmd_predict(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = " ".join(context.args).strip() if context.args else ""
-    if not text:
-        await update.message.reply_text(
-            "Использование: /predict <текст новости>\nИли отправьте текст сообщением."
-        )
+    if text:
+        await _do_predict(update, text)
         return
-    await _do_predict(update, text)
+    await update.message.reply_text("🔄 Анализирую...")
+    await _run_full_predict(update.message)
+
+
+async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    if query.data == "full_predict":
+        await query.message.reply_text("🔄 Анализирую...")
+        await _run_full_predict(query.message)
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.message.text or "").strip()
     if not text:
+        return
+    if text == "📊 Анализ":
+        await update.message.reply_text("🔄 Анализирую...")
+        await _run_full_predict(update.message)
         return
     await _do_predict(update, text)
 
@@ -242,25 +208,37 @@ async def _do_predict(update: Update, text: str) -> None:
     try:
         task = await _api_post("/tasks/predict", json={"texts": [text]})
     except httpx.HTTPStatusError as e:
-        if e.response.status_code == 503:
-            await update.message.reply_text("Сервис предсказаний временно недоступен.")
-        else:
-            await update.message.reply_text(f"Ошибка API: {e.response.status_code}")
+        await update.message.reply_text(
+            "Сервис предсказаний временно недоступен." if e.response.status_code == 503
+            else f"Ошибка API: {e.response.status_code}"
+        )
         return
     except Exception as e:
         logger.exception("Ошибка создания задачи: %s", e)
         await update.message.reply_text("Не удалось поставить задачу в очередь.")
         return
 
-    task_id = task["id"]
-    await update.message.reply_text(f"⏳ Задача в очереди (ID: {task_id})\nЖду результат...")
+    await update.message.reply_text(f"⏳ Задача {task['id']}\nЖду результат...")
+    result = await _poll_task(task["id"])
 
-    result = await _poll_task(task_id)
-    await update.message.reply_text(_format_prediction_result(result))
+    if result["status"] == "failed":
+        await update.message.reply_text(f"❌ Ошибка:\n{(result.get('error') or '')[:300]}")
+        return
+    preds = (result.get("result") or {}).get("predictions", [])
+    if not preds:
+        await update.message.reply_text("Нет результатов от модели.")
+        return
+
+    pred_ru = LABELS_RU.get(preds[0].get("prediction", "?"), preds[0].get("prediction", "?"))
+    await update.message.reply_text(
+        f"Оценка новости: {pred_ru}",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("📊 Полный анализ", callback_data="full_predict")]]
+        ),
+    )
 
 
 async def cmd_train(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Запустить обучение модели через очередь."""
     overrides = list(context.args) if context.args else []
     try:
         task = await _api_post("/tasks/train", json={"overrides": overrides})
@@ -271,30 +249,24 @@ async def cmd_train(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("Ошибка создания задачи обучения: %s", e)
         await update.message.reply_text("Не удалось запустить обучение.")
         return
-
-    task_id = task["id"]
     overrides_str = f"\nПараметры: {', '.join(overrides)}" if overrides else ""
     await update.message.reply_text(
-        f"🚀 Обучение запущено!{overrides_str}\n"
-        f"ID задачи: {task_id}\n\n"
-        f"Проверяйте статус командой:\n/status {task_id}"
+        f"🚀 Обучение запущено!{overrides_str}\nID: {task['id']}\n\n/status {task['id']}"
     )
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Проверить статус задачи по ID."""
     if not context.args:
         await update.message.reply_text("Использование: /status <task_id>")
         return
-
     task_id = context.args[0].strip()
     try:
         task = await _api_get(f"/tasks/{task_id}")
     except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            await update.message.reply_text(f"Задача {task_id} не найдена.")
-        else:
-            await update.message.reply_text(f"Ошибка API: {e.response.status_code}")
+        await update.message.reply_text(
+            f"Задача {task_id} не найдена." if e.response.status_code == 404
+            else f"Ошибка API: {e.response.status_code}"
+        )
         return
     except Exception as e:
         logger.exception("Ошибка запроса статуса: %s", e)
@@ -303,40 +275,21 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     icon = STATUS_ICONS.get(task["status"], "🔄")
     task_type = "Обучение" if task["task_type"] == "train" else "Предсказание"
-    lines = [
-        f"{icon} {task_type} | Статус: {task['status']}",
-        f"ID: {task['id']}",
-    ]
-    if task.get("created_at"):
-        lines.append(f"Создана: {task['created_at'][:19].replace('T', ' ')}")
-    if task.get("started_at"):
-        lines.append(f"Начата: {task['started_at'][:19].replace('T', ' ')}")
-    if task.get("completed_at"):
-        lines.append(f"Завершена: {task['completed_at'][:19].replace('T', ' ')}")
-
-    if task["status"] == "completed":
-        if task["task_type"] == "predict":
-            lines.append("")
-            result_text = _format_prediction_result(task)
-            lines.append(result_text)
-        elif task["task_type"] == "train":
-            result = task.get("result") or {}
-            checkpoint = result.get("best_checkpoint", "")
-            if checkpoint:
-                lines.append(f"\nЛучший чекпоинт: {checkpoint}")
-            test_results = result.get("test_results", [])
-            if test_results and isinstance(test_results, list) and test_results:
-                metrics = test_results[0]
-                acc = metrics.get("test_acc", "")
-                f1 = metrics.get("test_f1", "")
-                if acc:
-                    lines.append(f"Accuracy: {float(acc):.3f}")
-                if f1:
-                    lines.append(f"F1: {float(f1):.3f}")
+    lines = [f"{icon} {task_type} | {task['status']}", f"ID: {task['id']}"]
+    for key, label in (("created_at", "Создана"), ("started_at", "Начата"), ("completed_at", "Завершена")):
+        if task.get(key):
+            lines.append(f"{label}: {task[key][:19].replace('T', ' ')}")
+    if task["status"] == "completed" and task["task_type"] == "train":
+        result = task.get("result") or {}
+        if result.get("best_checkpoint"):
+            lines.append(f"\nЧекпоинт: {result['best_checkpoint']}")
+        for m in (result.get("test_results") or [])[:1]:
+            if m.get("test_acc"):
+                lines.append(f"Accuracy: {float(m['test_acc']):.3f}")
+            if m.get("test_f1"):
+                lines.append(f"F1: {float(m['test_f1']):.3f}")
     elif task["status"] == "failed":
-        error = (task.get("error") or "")[:300]
-        lines.append(f"\n❌ Ошибка:\n{error}")
-
+        lines.append(f"\n❌ {(task.get('error') or '')[:300]}")
     await update.message.reply_text("\n".join(lines))
 
 
@@ -354,11 +307,10 @@ def main() -> None:
     )
     app = Application.builder().token(token).request(request).get_updates_request(request).build()
     app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("predict_news", cmd_predict_news))
-    app.add_handler(CommandHandler("rate", cmd_rate))
     app.add_handler(CommandHandler("predict", cmd_predict))
     app.add_handler(CommandHandler("train", cmd_train))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     logger.info("Бот запущен")

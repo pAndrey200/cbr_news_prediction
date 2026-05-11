@@ -26,4 +26,4 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
 )
 
-celery_app.autodiscover_tasks(["cbr_news"])
+celery_app.autodiscover_tasks(["cbr_news.workers"])
