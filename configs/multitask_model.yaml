@@ -1,0 +1,22 @@
+defaults:
+  - _self_
+
+model:
+  backbone: "DeepPavlov/rubert-base-cased"
+  num_classes: 3
+  dropout: 0.1
+
+  learning_rate: 5e-6
+  weight_decay: 0.1 
+  warmup_steps: 200 
+
+  freeze_backbone: true
+  num_frozen_layers: 8
+
+  auxiliary_tasks:
+    - key_rate 
+    # - usd
+    # - inflation
+
+  auxiliary_weight: 0.01
+  main_weight: 1.0

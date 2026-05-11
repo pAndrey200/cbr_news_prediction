@@ -2,7 +2,7 @@ defaults:
   - _self_
 
 model:
-  backbone: "cointegrated/rubert-tiny2"
+  backbone: "DeepPavlov/rubert-base-cased"
   num_classes: 3
   dropout: 0.1
 

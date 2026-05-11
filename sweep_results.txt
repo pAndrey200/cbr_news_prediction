@@ -1,0 +1,12 @@
+
+==================================================================================================================================
+Sweep started : 2026-05-11 18:01:44
+Grid          : {"lr_scheduler": ["linear", "cosine", "onecycle"], "fusion_capacity": ["base", "large"]}
+Fixed params  : {"dataset": "combined_t025", "train_end": "2024-06-30", "val_end": "2024-12-31", "backbone": "DeepPavlov/rubert-base-cased", "max_length": 512, "pool_mode": "cls", "tab_arch": "mlp_deep", "cbr_weight": 3.0, "text_proj_dim": 256, "aux_weight": 0.0, "focal_gamma": 0.0, "oversample_up": 3, "label_smoothing": 0.05, "dropout": 0.3, "epochs": 30, "patience": 7, "gru_hidden": 32}
+==================================================================================================================================
+
+==================================================================================================================================
+Sweep started : 2026-05-11 18:03:03
+Grid          : {"lr_scheduler": ["linear", "cosine", "onecycle"], "fusion_capacity": ["base", "large"]}
+Fixed params  : {"dataset": "combined_t025", "train_end": "2024-06-30", "val_end": "2024-12-31", "backbone": "DeepPavlov/rubert-base-cased", "max_length": 512, "pool_mode": "cls", "tab_arch": "mlp_deep", "cbr_weight": 3.0, "text_proj_dim": 256, "aux_weight": 0.0, "focal_gamma": 0.0, "oversample_up": 3, "label_smoothing": 0.05, "dropout": 0.3, "epochs": 30, "patience": 7, "gru_hidden": 32}
+==================================================================================================================================

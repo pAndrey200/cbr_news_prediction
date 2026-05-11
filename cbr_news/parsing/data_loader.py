@@ -6,7 +6,7 @@ import pandas as pd
 from dvc.api import DVCFileSystem
 from hydra.utils import get_original_cwd
 
-from cbr_news.parser import CBRDataParser
+from cbr_news.parsing.parser import CBRDataParser
 
 logger = logging.getLogger(__name__)
 
@@ -109,18 +109,25 @@ class CBRNewsDataLoader:
                 logger.warning(f"Не удалось настроить DVC remote: {e}")
 
     def download_data(self, force_download: bool = False) -> pd.DataFrame:
-        """Скачивание данных через DVC или парсинг"""
         logger.info("Загрузка данных...")
+
+        run_parser = True
+        try:
+            run_parser = self.config.data.run_parser
+        except (AttributeError, KeyError):
+            pass
+
+        if not run_parser:
+            logger.info("run_parser=false, загрузка данных из БД...")
+            return self._collect_data_from_source()
 
         if self.data_path.exists() and not force_download:
             logger.info(f"Данные уже существуют: {self.data_path}")
             return self._load_local_data()
 
-        # Попытка загрузки через DVC
         try:
             logger.info("Попытка загрузки через DVC...")
             fs = DVCFileSystem()
-            # Проверяем, существует ли файл в DVC перед загрузкой
             try:
                 if fs.exists(str(self.data_path)):
                     fs.get(str(self.data_path), str(self.data_path))
@@ -229,3 +236,88 @@ class CBRNewsDataLoader:
         text = re.sub(r"[^\w\s.,!?%\-]", "", text)
 
         return text
+
+    def download_multitask_data(self, force_download: bool = False) -> pd.DataFrame:
+        logger.info("Загрузка multi-task данных...")
+
+        run_parser = True
+        try:
+            run_parser = self.config.data.run_parser
+        except (AttributeError, KeyError):
+            pass
+
+        try:
+            project_root = Path(get_original_cwd())
+        except (ValueError, AttributeError):
+            project_root = Path.cwd()
+
+        # Use combined dataset if configured, otherwise fall back to default
+        combined_path_str = None
+        try:
+            combined_path_str = self.config.data.multitask_dataset_path
+        except (AttributeError, KeyError):
+            pass
+
+        if combined_path_str:
+            combined_path = project_root / combined_path_str
+            if combined_path.exists():
+                logger.info(f"Загрузка объединённого датасета: {combined_path}")
+                df = pd.read_csv(combined_path)
+                logger.info(f"Загружено {len(df)} записей из объединённого датасета")
+                return df
+            else:
+                logger.warning(f"Файл {combined_path} не найден, использую стандартный датасет")
+
+        multitask_path = project_root / "data" / "cbr_multitask_dataset.csv"
+
+        if run_parser and multitask_path.exists() and not force_download:
+            logger.info(f"Multi-task данные уже существуют: {multitask_path}")
+            df = pd.read_csv(multitask_path)
+            logger.info(f"Загружено {len(df)} записей")
+            return df
+
+        logger.info("Создание multi-task датасета...")
+        self.parser.collect_all_data()
+        df_multitask = self.parser.prepare_multitask_dataset(df_processed=None)
+
+        return df_multitask
+
+    def split_by_time_multitask(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Разделение multi-task данных по времени"""
+
+        def extract_year(date_str):
+            try:
+                # Формат: DD.MM.YYYY
+                parts = str(date_str).split(".")
+                if len(parts) == 3:
+                    year = int(parts[2])
+                    if 2010 <= year <= 2025:
+                        return year
+            except:
+                pass
+            return 2020
+
+        df["year"] = df["date"].apply(extract_year)
+
+        train_years = self.config.data.train_years
+        test_years = self.config.data.test_years
+
+        train_df = df[df["year"].isin(train_years)]
+        test_df = df[df["year"].isin(test_years)]
+
+        if train_df.empty or test_df.empty:
+            logger.warning(
+                "Не удалось разделить по годам, используется случайное разделение"
+            )
+            from sklearn.model_selection import train_test_split
+
+            train_df, test_df = train_test_split(
+                df,
+                test_size=self.config.data.test_size,
+                random_state=self.config.seed,
+            )
+
+        logger.info(f"Multi-task Train: {len(train_df)} записей")
+        logger.info(f"Multi-task Test: {len(test_df)} записей")
+
+        return train_df, test_df

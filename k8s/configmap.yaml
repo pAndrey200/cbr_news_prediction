@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cbr-config
+  namespace: cbr-news
+data:
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  REDIS_URL: redis://redis:6379/0
+  API_URL: http://api:8000
+  USE_DATABASE: "true"
+  BEST_CHECKPOINT: /app/checkpoints/sweep/run_002/best-v24.ckpt
+  CHECKPOINT_PATH: /app/checkpoints

@@ -4,15 +4,25 @@ from pathlib import Path
 
 import httpx
 from bs4 import BeautifulSoup
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
-
-# Добавляем корень проекта в path
+from sqlalchemy.orm import Session
 import sys
+
 _project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_project_root))
 
-from cbr_news.inference import CBRNewsPredictor
+from cbr_news.database.db import get_db, init_db, async_init_db
+from cbr_news.ml.inference import CBRNewsPredictor
+from cbr_news.database.repository import (
+    NewsRepository,
+    KeyRateRepository,
+    CurrencyRateRepository,
+    InflationRepository,
+    RuoniaRepository,
+    OilPriceRepository,
+)
+from api.tasks_router import router as tasks_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,7 +33,10 @@ app = FastAPI(
     version="0.1.0",
 )
 
+app.include_router(tasks_router)
+
 predictor: CBRNewsPredictor | None = None
+USE_DATABASE = os.environ.get("USE_DATABASE", "true").lower() == "true"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -31,9 +44,6 @@ HEADERS = {
 
 
 def resolve_checkpoint_file(path: str | Path) -> str | None:
-    """
-    Возвращает путь к файлу .ckpt.
-    """
     p = Path(path)
     if not p.exists():
         return None
@@ -47,11 +57,24 @@ def resolve_checkpoint_file(path: str | Path) -> str | None:
     return None
 
 
-def fetch_latest_news(limit: int = 5) -> list[dict]:
-    """
-    Загружает последние новости типа events с сайта ЦБ РФ.
-    Возвращает список {title, text} для limit новостей.
-    """
+def fetch_latest_news_from_db(db: Session, limit: int = 5) -> list[dict]:
+    try:
+        news_list = NewsRepository.get_latest_news(db, limit=limit)
+        result = []
+        for news in news_list:
+            result.append({
+                "title": news.title,
+                "text": news.content or news.title,
+                "date": news.date.isoformat() if news.date else "",
+                "link": news.link,
+            })
+        return result
+    except Exception as e:
+        logger.error("Ошибка при получении новостей из БД: %s", e)
+        return []
+
+
+def fetch_latest_news_from_web(limit: int = 5) -> list[dict]:
     base_url = "https://www.cbr.ru/news/eventandpress/"
     events_data: list = []
     try:
@@ -102,12 +125,23 @@ def fetch_latest_news(limit: int = 5) -> list[dict]:
 
 
 @app.on_event("startup")
-def startup():
+async def startup():
     global predictor
-    raw = os.environ.get("CHECKPOINT_PATH")
-    checkpoint = resolve_checkpoint_file(raw) if raw else None
+
+    if USE_DATABASE:
+        try:
+            await async_init_db()
+            logger.info("База данных инициализирована успешно")
+        except Exception as e:
+            logger.error("Не удалось инициализировать БД: %s", e)
+
+    # BEST_CHECKPOINT takes priority over CHECKPOINT_PATH
+    best = os.environ.get("BEST_CHECKPOINT")
+    checkpoint = resolve_checkpoint_file(best) if best else None
     if not checkpoint:
-        # Пробуем типичные пути (директории Hydra: outputs/дата/время/checkpoints/)
+        raw = os.environ.get("CHECKPOINT_PATH")
+        checkpoint = resolve_checkpoint_file(raw) if raw else None
+    if not checkpoint:
         for p in (
             _project_root / "checkpoints",
             _project_root / "outputs",
@@ -119,20 +153,40 @@ def startup():
                     break
     if not checkpoint:
         logger.warning(
-            "Чекпоинт не найден.
+            "Чекпоинт не найден. API будет работать без предсказаний."
         )
         predictor = None
         return
-    config_path = os.environ.get("CONFIG_PATH") or str(_project_root / "configs" / "config.yaml")
+    # Look for a pre-saved Stage-2 sklearn model in the same directory as the Stage-1 checkpoint
+    ckpt_dir = Path(checkpoint).parent
+    rate_model_candidates = list(ckpt_dir.glob("rate_model_cache_*.pkl"))
+    rate_model_path = max(rate_model_candidates, key=lambda f: f.stat().st_mtime) if rate_model_candidates else None
+    if rate_model_path:
+        logger.info("Найден Stage-2 кэш рядом с чекпоинтом: %s", rate_model_path.name)
+
+    config_path = os.environ.get("CONFIG_PATH") or str(_project_root / "configs" / "multitask_config.yaml")
     try:
         predictor = CBRNewsPredictor(
             checkpoint_path=checkpoint,
             config_path=config_path if Path(config_path).exists() else None,
+            multitask=True,
+            rate_model_path=rate_model_path,
         )
         logger.info("Модель загружена успешно")
     except Exception as e:
         logger.exception("Не удалось загрузить модель: %s", e)
         predictor = None
+        return
+
+    # Прогрев Stage 2: строим BERT-эмбеддинги и обучаем GBoost при старте,
+    # чтобы первый запрос /predict_key_rate не тайм-аутился
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, predictor._ensure_rate_model)
+        logger.info("Stage 2 (rate model) прогрет успешно")
+    except Exception as e:
+        logger.warning("Не удалось прогреть Stage 2: %s", e)
 
 
 class PredictRequest(BaseModel):
@@ -154,9 +208,21 @@ def health():
     return {"status": "ok", "model_loaded": predictor is not None}
 
 
+@app.get("/news")
+def get_news(limit: int = 5, db: Session = Depends(get_db)):
+    """Вернуть последние новости ЦБ без предсказаний (для бота)."""
+    limit = max(1, min(limit, 20))
+    if USE_DATABASE:
+        news = fetch_latest_news_from_db(db, limit=limit)
+        if not news:
+            news = fetch_latest_news_from_web(limit=limit)
+    else:
+        news = fetch_latest_news_from_web(limit=limit)
+    return {"news": news}
+
+
 @app.post("/predict", response_model=PredictResponse)
 def predict(request: PredictRequest):
-    """Предсказание направления ставки по списку текстов (down/same/up)."""
     if predictor is None:
         raise HTTPException(503, "Модель не загружена")
     try:
@@ -169,17 +235,22 @@ def predict(request: PredictRequest):
 
 @app.get("/predict_news", response_model=PredictNewsResponse)
 @app.post("/predict_news", response_model=PredictNewsResponse)
-def predict_news(limit: int = 5):
-    """
-    Загружает последние новости ЦБ, предсказывает по ним направление ставки,
-    возвращает новости и предсказания. limit — число новостей (по умолчанию 5).
-    """
+def predict_news(limit: int = 5, db: Session = Depends(get_db)):
     if predictor is None:
         raise HTTPException(503, "Модель не загружена")
     limit = max(1, min(limit, 20))
-    news = fetch_latest_news(limit=limit)
+
+    if USE_DATABASE:
+        news = fetch_latest_news_from_db(db, limit=limit)
+        if not news:
+            logger.warning("Нет новостей в БД, пробуем загрузить с сайта")
+            news = fetch_latest_news_from_web(limit=limit)
+    else:
+        news = fetch_latest_news_from_web(limit=limit)
+
     if not news:
-        raise HTTPException(502, "Не удалось загрузить новости с сайта ЦБ")
+        raise HTTPException(502, "Не удалось загрузить новости")
+
     texts = [n["text"] or n["title"] for n in news]
     try:
         results = predictor.predict(texts)
@@ -195,3 +266,62 @@ def predict_news(limit: int = 5):
     }
     summary["recommendation"] = max(summary, key=summary.get)
     return PredictNewsResponse(news=news, predictions=results, summary=summary)
+
+
+@app.get("/indicators")
+def get_indicators(db: Session = Depends(get_db)):
+    """Вернуть последние значения экономических индикаторов."""
+    result = {}
+
+    kr = KeyRateRepository.get_latest(db)
+    if kr:
+        result["key_rate"] = {"value": float(kr.rate), "date": kr.date.isoformat()}
+
+    for code in ("USD", "EUR", "CNY"):
+        rec = CurrencyRateRepository.get_latest(db, code)
+        if rec:
+            result[code] = {"value": float(rec.rate), "date": rec.date.isoformat()}
+
+    ruonia = RuoniaRepository.get_latest(db)
+    if ruonia:
+        result["ruonia"] = {"value": float(ruonia.rate), "date": ruonia.date.isoformat()}
+
+    infl = InflationRepository.get_latest(db)
+    if infl:
+        result["inflation"] = {"value": float(infl.value), "date": infl.date.isoformat()}
+
+    oil = OilPriceRepository.get_latest(db)
+    if oil:
+        result["brent"] = {"value": float(oil.price), "date": oil.date.isoformat()}
+
+    return result
+
+
+@app.get("/predict_key_rate")
+def predict_key_rate(window_days: int = 14, db: Session = Depends(get_db)):
+    """Предсказать направление ключевой ставки на ближайшем заседании ЦБ.
+    window_days: сколько дней назад брать новости (по умолчанию 14, как при обучении).
+    """
+    if predictor is None:
+        raise HTTPException(503, "Модель не загружена")
+
+    texts = []
+    if USE_DATABASE:
+        try:
+            from datetime import date, timedelta
+            end_date = date.today()
+            start_date = end_date - timedelta(days=window_days)
+            news_rows = NewsRepository.get_news_by_date_range(db, start_date, end_date)
+            texts = [n.content or n.title for n in news_rows if n.content or n.title]
+            logger.info("Новостей за %d дней из БД: %d", window_days, len(texts))
+        except Exception as e:
+            logger.warning("Ошибка при получении новостей из БД: %s", e)
+
+    try:
+        result = predictor.predict_key_rate(texts=texts or None)
+        result["window_days"] = window_days
+        result["n_articles"] = len(texts)
+        return result
+    except Exception as e:
+        logger.exception("Ошибка predict_key_rate: %s", e)
+        raise HTTPException(500, str(e))
