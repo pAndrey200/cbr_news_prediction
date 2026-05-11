@@ -62,7 +62,8 @@ MEETING_DS  = DATA_DIR / "meeting_dataset.parquet"
 CSV_PATH    = DATA_DIR / "cbr_combined_dataset_t025.csv"
 
 BERT_NAME    = "DeepPavlov/rubert-base-cased"
-MAX_LENGTH   = 512
+MAX_LENGTH   = 512   # Stage 1 (RUONIA daily model)
+MAX_LENGTH_STAGE2 = 256  # Stage 2 (meeting model) — must match sweep_meeting.py training
 MAX_ARTICLES = 20
 
 # RUONIA direction labels (daily model)
@@ -73,8 +74,7 @@ RUONIA_LABELS_RU = {"down": "Снижение", "same": "Без изменени
 CLASS_NAMES = ["cut", "hold", "hike"]
 LABEL_MAP   = {0: "cut", 1: "hold", 2: "hike"}
 
-TRAIN_END = pd.Timestamp("2022-12-31")
-VAL_END   = pd.Timestamp("2023-12-31")
+TRAIN_END = pd.Timestamp("2024-06-30")
 
 CURRENT_KEY_RATE = 21.0  # fallback if DB is unavailable
 
@@ -102,19 +102,18 @@ def _load_tab_default(n_tab: int, device: torch.device) -> torch.Tensor:
     Falls back to latest row of precomputed parquet, then to zeros.
     """
     from cbr_news.ml.feature_engineering import build_tabular_features, get_feature_columns
-
-    # ── primary: live features from DB for today ───────────────────────────────
     try:
         today_str = pd.Timestamp.now().strftime("%d.%m.%Y")
         df_today = pd.DataFrame([{"date": today_str}])
         df_feat = build_tabular_features(df_today, date_col="date")
         feat_cols = get_feature_columns(df_feat)
         row = df_feat[feat_cols].iloc[0].values.astype(np.float32)
-        row = np.append(row, 0.0)           # is_cbr_source = 0 (non-CBR article)
-        if len(row) == n_tab and not np.isnan(row).all():
-            logger.info("Tab default: live DB features for %s (%d features)", today_str, len(row))
+        row = np.append(row, 0.0)
+        if len(row) < n_tab:
+            row = np.concatenate([row, np.zeros(n_tab - len(row), dtype=np.float32)])
+        if not np.isnan(row).all():
+            logger.info("Tab default: live DB features for %s (%d features)", today_str, n_tab)
             return torch.tensor(row, dtype=torch.float32, device=device).unsqueeze(0)
-        logger.warning("Live tab features incomplete (%d/%d non-NaN), falling back", (~np.isnan(row)).sum(), n_tab)
     except Exception as e:
         logger.warning("Failed to compute live tab features: %s", e)
 
@@ -327,67 +326,123 @@ def precompute_bert_cls_all(
 
 # ─── Stage 2: sklearn classifier ─────────────────────────────────────────────
 
+def _build_meet_feats(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute meeting-level structural features for all rows in df.
+    Returns (meet_feats, mf_means, mf_std) — normalised on train split.
+    """
+    from cbr_news.ml.sweep_meeting import add_meeting_features, extract_meeting_feats
+    train_mask = (df["meeting_date"] <= TRAIN_END).values
+    df2 = add_meeting_features(df.sort_values("meeting_date").reset_index(drop=True).copy())
+    mf = extract_meeting_feats(df2).astype(np.float32)
+    mf_means = mf[train_mask].mean(0)
+    mf_std   = mf[train_mask].std(0) + 1e-6
+    return (mf - mf_means) / mf_std, mf_means, mf_std
+
+
+def compute_current_meet_feats(
+    df_meetings: pd.DataFrame,
+    n_articles: int,
+    current_date: pd.Timestamp | None = None,
+) -> np.ndarray:
+    """
+    Compute meeting-level features for the CURRENT (upcoming) prediction window.
+    Uses historical meeting outcomes to compute streak / days_since_change etc.
+    Returns raw (unnormalised) feature vector of shape (6,):
+      [meet_streak, meet_days_since_change, n_articles, meet_hold_streak, meet_month, meet_year]
+    """
+    from cbr_news.ml.sweep_meeting import add_meeting_features, extract_meeting_feats
+    if current_date is None:
+        current_date = pd.Timestamp.now()
+
+    df = df_meetings.sort_values("meeting_date").reset_index(drop=True).copy()
+    df2 = add_meeting_features(df)
+    mf = extract_meeting_feats(df2)
+
+    # Start with last historical meeting's features, then override time-dependent ones
+    current_mf = mf[-1].copy().astype(np.float32)
+
+    # Recompute days_since_change: days from last non-hold meeting to current_date
+    directions = df["direction"].tolist()
+    last_change_date = df["meeting_date"].iloc[0]  # fallback
+    for i in range(len(directions) - 1, -1, -1):
+        if directions[i] != "hold":
+            last_change_date = df["meeting_date"].iloc[i]
+            break
+    days_since = float((current_date - last_change_date).days)
+
+    # cols order from extract_meeting_feats:
+    # [meet_streak, meet_days_since_change, n_articles, meet_hold_streak, meet_month, meet_year]
+    current_mf[1] = days_since
+    current_mf[2] = float(n_articles)
+    current_mf[4] = float(current_date.month)
+    current_mf[5] = float(current_date.year)
+
+    return current_mf
+
+
 def fit_sklearn(
     df: pd.DataFrame,
     embs: np.ndarray,
     soft_feats: Optional[np.ndarray] = None,
+    pca_dim: int = 150,
 ):
     """
-    Fit the best sklearn pipeline on the training meetings.
-    Returns (pipeline, col_means, col_std).
+    Fit Stage-2 GradientBoosting on meeting features (best config from sweep).
+    Feature set: PCA(BERT) + tab + meet
+    Returns (pipeline, col_means, col_std, pca, mf_means, mf_std).
     """
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.svm import LinearSVC
+    from sklearn.decomposition import PCA
+    from sklearn.ensemble import GradientBoostingClassifier
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import Pipeline
-    from sklearn.metrics import f1_score
 
     dates      = df["meeting_date"]
     train_mask = (dates <= TRAIN_END).values
-    val_mask   = ((dates > TRAIN_END) & (dates <= VAL_END)).values
 
-    # Normalise tabular on train
-    X_tab  = np.stack(df["tabular"].values).astype(np.float32)
+    # ── Tabular features (normalise on train) ──────────────────────────────
+    X_tab = np.stack(df["tabular"].values).astype(np.float32)
     col_means = np.nanmean(X_tab[train_mask], axis=0)
     col_means[np.isnan(col_means)] = 0.0
     nan_idx = np.where(np.isnan(X_tab))
     if nan_idx[0].size:
         X_tab[nan_idx] = np.take(col_means, nan_idx[1])
-    col_std   = np.nanstd(X_tab[train_mask], axis=0) + 1e-6
+    col_std    = np.nanstd(X_tab[train_mask], axis=0) + 1e-6
     X_tab_norm = (X_tab - col_means) / col_std
 
-    X_all = np.concatenate([embs, X_tab_norm], axis=1)
-    if soft_feats is not None:
-        X_all = np.concatenate([X_all, soft_feats], axis=1)
+    # ── PCA on BERT embeddings (fit on train only) ─────────────────────────
+    n_comp = min(pca_dim, embs.shape[1], int(train_mask.sum()) - 1)
+    pca = PCA(n_components=n_comp, random_state=42)
+    pca.fit(embs[train_mask])
+    embs_pca = pca.transform(embs)
+    logger.info("PCA: %d → %d components (%.1f%% var)",
+                embs.shape[1], n_comp, pca.explained_variance_ratio_.sum() * 100)
+
+    # ── Meeting-level structural features ──────────────────────────────────
+    meet_feats, mf_means, mf_std = _build_meet_feats(df)
+
+    # Assemble: bert_pca + tab + meet
+    X_all = np.concatenate([embs_pca, X_tab_norm, meet_feats], axis=1)
+    logger.info("Stage-2 feature matrix: %s  (bert_pca=%d, tab=%d, meet=%d)",
+                X_all.shape, embs_pca.shape[1], X_tab_norm.shape[1], meet_feats.shape[1])
 
     y = df["label"].values
 
-    classifiers = [
-        ("LogReg C=0.001", LogisticRegression(C=0.001, max_iter=2000, class_weight="balanced", random_state=0)),
-        ("LogReg C=0.01",  LogisticRegression(C=0.01,  max_iter=2000, class_weight="balanced", random_state=0)),
-        ("LogReg C=0.1",   LogisticRegression(C=0.1,   max_iter=2000, class_weight="balanced", random_state=0)),
-        ("SVC C=0.01",     LinearSVC(C=0.01, max_iter=2000, class_weight="balanced", random_state=0)),
-        ("SVC C=0.1",      LinearSVC(C=0.1,  max_iter=2000, class_weight="balanced", random_state=0)),
-    ]
+    # ── GradientBoosting (best config from sweep: cv_f1=0.7345) ───────────
+    clf = GradientBoostingClassifier(
+        n_estimators=100, max_depth=2, learning_rate=0.1,
+        min_samples_leaf=2, subsample=0.9, random_state=42,
+    )
+    pipe = Pipeline([("scaler", StandardScaler()), ("clf", clf)])
+    pipe.fit(X_all[train_mask], y[train_mask])
+    logger.info("Stage-2 GBoost fitted on %d meetings (up to %s)", train_mask.sum(), TRAIN_END.date())
 
-    best_val_f1, best_pipe, best_name = -1.0, None, ""
-    for name, clf in classifiers:
-        pipe = Pipeline([("scaler", StandardScaler()), ("clf", clf)])
-        pipe.fit(X_all[train_mask], y[train_mask])
-        val_f1 = f1_score(
-            y[val_mask], pipe.predict(X_all[val_mask]),
-            average="macro", zero_division=0,
-        )
-        if val_f1 > best_val_f1:
-            best_val_f1, best_pipe, best_name = val_f1, pipe, name
-
-    logger.info("Best classifier: %s  (val macro F1 = %.4f)", best_name, best_val_f1)
-    return best_pipe, col_means, col_std
+    return pipe, col_means, col_std, pca, mf_means, mf_std
 
 
 def predict_window(
     texts: List[str],
-    tabular: np.ndarray,     # raw (n_tab,) feature vector
+    tabular: np.ndarray,
     col_means: np.ndarray,
     col_std: np.ndarray,
     bert_name: str,
@@ -399,10 +454,14 @@ def predict_window(
     daily_n_tab: int = 90,
     daily_device=None,
     use_soft_feats: bool = False,
+    pca=None,
+    meet_feats: np.ndarray | None = None,
 ) -> dict:
     """
     Build features for ONE meeting window and predict direction.
     Returns dict with keys: pred_label, probs (3,), article_probs (N, 3) or None.
+    pca: fitted sklearn PCA (applied to BERT emb if provided)
+    meet_feats: (1, K) normalised meeting-level features to append
     """
     # ── BERT CLS mean ──────────────────────────────────────────────────────
     tokenizer = AutoTokenizer.from_pretrained(bert_name)
@@ -424,6 +483,10 @@ def predict_window(
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+    # ── Apply PCA to BERT embeddings ───────────────────────────────────────
+    if pca is not None:
+        emb = pca.transform(emb)   # (1, n_comp)
+
     # ── Normalise tabular ──────────────────────────────────────────────────
     tab_arr = np.array(tabular, dtype=np.float32).reshape(1, -1)
     nan_idx = np.where(np.isnan(tab_arr))
@@ -431,9 +494,13 @@ def predict_window(
         tab_arr[nan_idx] = np.take(col_means, nan_idx[1])
     tab_norm = (tab_arr - col_means) / col_std                        # (1, n_tab)
 
-    X = np.concatenate([emb, tab_norm], axis=1)                       # (1, H+n_tab)
+    X = np.concatenate([emb, tab_norm], axis=1)
 
-    # ── Daily model soft-label features ───────────────────────────────────
+    # ── Meeting-level structural features ──────────────────────────────────
+    if meet_feats is not None:
+        X = np.concatenate([X, meet_feats.reshape(1, -1)], axis=1)
+
+    # ── Daily model soft-label features (legacy) ───────────────────────────
     article_probs = None
     if daily_model is not None and use_soft_feats:
         article_probs = score_articles(
@@ -499,9 +566,6 @@ def load_window_from_csv(
 
     texts = window["cleaned_text"].fillna("").tolist() or [""]
     return texts, tabular, window
-
-
-# ─── Human-readable report ────────────────────────────────────────────────────
 
 _DIRECTION_RU = {
     "hike": "↑  ПОВЫШЕНИЕ",
@@ -609,8 +673,10 @@ class CBRNewsPredictor:
         config_path: str | None = None,   # unused, kept for backward compat
         multitask: bool = False,          # unused, kept for backward compat
         meeting_dataset: str | Path | None = None,
+        rate_model_path: str | Path | None = None,
     ):
         self.ckpt_path = checkpoint_path
+        self._rate_model_path = Path(rate_model_path) if rate_model_path else None
         self._model = None
         self._tokenizer = None
         self._n_tab = None
@@ -620,6 +686,9 @@ class CBRNewsPredictor:
         self._sklearn_pipeline = None
         self._col_means = None
         self._col_std = None
+        self._pca = None
+        self._mf_means = None
+        self._mf_std = None
         self._soft_feats_all = None
         self._bert_embs = None
         self._df_meetings = None
@@ -651,8 +720,32 @@ class CBRNewsPredictor:
 
         # ── Disk cache: skip costly compute if checkpoint hasn't changed ──────
         import pickle, hashlib
+
+        # Explicit rate model path (e.g. from CHECKPOINT_DIR) takes priority
+        explicit_path = self._rate_model_path
+        if explicit_path and explicit_path.exists():
+            logger.info("Loading rate model from explicit path: %s", explicit_path)
+            try:
+                with open(explicit_path, "rb") as f:
+                    cache = pickle.load(f)
+                self._sklearn_pipeline = cache["pipeline"]
+                self._col_means        = cache["col_means"]
+                self._col_std          = cache["col_std"]
+                self._pca              = cache.get("pca")
+                self._mf_means         = cache.get("mf_means")
+                self._mf_std           = cache.get("mf_std")
+                self._soft_feats_all   = cache["soft_feats"]
+                self._bert_embs        = cache["bert_embs"]
+                self._rate_model_ready = True
+                logger.info("Rate model loaded from %s", explicit_path.name)
+                return
+            except Exception as e:
+                logger.warning("Explicit rate model load failed (%s), recomputing …", e)
+
+        # v2: GBoost + PCA(150) + meeting features (invalidates old LogReg cache)
+        CACHE_VERSION = "v2"
         ckpt_hash = hashlib.md5(self.ckpt_path.encode()).hexdigest()[:8]
-        cache_path = DATA_DIR / f"rate_model_cache_{ckpt_hash}.pkl"
+        cache_path = DATA_DIR / f"rate_model_cache_{CACHE_VERSION}_{ckpt_hash}.pkl"
 
         if cache_path.exists():
             logger.info("Loading rate model cache from %s", cache_path)
@@ -662,6 +755,9 @@ class CBRNewsPredictor:
                 self._sklearn_pipeline = cache["pipeline"]
                 self._col_means        = cache["col_means"]
                 self._col_std          = cache["col_std"]
+                self._pca              = cache.get("pca")
+                self._mf_means         = cache.get("mf_means")
+                self._mf_std           = cache.get("mf_std")
                 self._soft_feats_all   = cache["soft_feats"]
                 self._bert_embs        = cache["bert_embs"]
                 self._rate_model_ready = True
@@ -691,24 +787,44 @@ class CBRNewsPredictor:
             device=self._device,
         )
 
-        # Fit sklearn on train split
-        self._sklearn_pipeline, self._col_means, self._col_std = fit_sklearn(
-            self._df_meetings, self._bert_embs, soft_feats=self._soft_feats_all,
-        )
+        # Fit sklearn on train split (GBoost + PCA + meeting features)
+        (
+            self._sklearn_pipeline,
+            self._col_means,
+            self._col_std,
+            self._pca,
+            self._mf_means,
+            self._mf_std,
+        ) = fit_sklearn(self._df_meetings, self._bert_embs)
 
-        # Save cache
+        # Save cache to DATA_DIR; also copy to checkpoint dir if writable
+        payload = {
+            "pipeline":   self._sklearn_pipeline,
+            "col_means":  self._col_means,
+            "col_std":    self._col_std,
+            "pca":        self._pca,
+            "mf_means":   self._mf_means,
+            "mf_std":     self._mf_std,
+            "soft_feats": self._soft_feats_all,
+            "bert_embs":  self._bert_embs,
+        }
         try:
             with open(cache_path, "wb") as f:
-                pickle.dump({
-                    "pipeline":  self._sklearn_pipeline,
-                    "col_means": self._col_means,
-                    "col_std":   self._col_std,
-                    "soft_feats": self._soft_feats_all,
-                    "bert_embs": self._bert_embs,
-                }, f)
+                pickle.dump(payload, f)
             logger.info("Rate model cache saved → %s", cache_path)
         except Exception as e:
             logger.warning("Could not save rate model cache: %s", e)
+
+        # Mirror to checkpoint dir so both stages live together
+        ckpt_dir = Path(self.ckpt_path).parent
+        mirror_path = ckpt_dir / cache_path.name
+        if ckpt_dir != DATA_DIR and mirror_path != cache_path:
+            try:
+                with open(mirror_path, "wb") as f:
+                    pickle.dump(payload, f)
+                logger.info("Rate model cache mirrored → %s", mirror_path)
+            except Exception as e:
+                logger.debug("Could not mirror rate model to checkpoint dir: %s", e)
 
         self._rate_model_ready = True
 
@@ -785,10 +901,26 @@ class CBRNewsPredictor:
                 df_feat = build_tabular_features(df_today, date_col="date")
                 feat_cols = get_feature_columns(df_feat)
                 tabular = df_feat[feat_cols].iloc[0].values.astype(np.float32)
-                logger.info("Key-rate window tabular: live DB features for %s", today_str)
+                if len(tabular) != tab_len:
+                    logger.warning(
+                        "Live tab features length mismatch (%d vs %d) — using training means",
+                        len(tabular), tab_len,
+                    )
+                    tabular = self._col_means.copy()
+                else:
+                    logger.info("Key-rate window tabular: live DB features for %s", today_str)
             except Exception as e:
-                logger.warning("Could not get live tabular features: %s — using zeros", e)
-                tabular = np.zeros(tab_len, dtype=np.float32)
+                logger.warning("Could not get live tabular features: %s — using training means", e)
+                tabular = self._col_means.copy() if self._col_means is not None else np.zeros(tab_len, dtype=np.float32)
+
+        # Compute current window's meeting-level features
+        current_meet_raw = compute_current_meet_feats(
+            self._df_meetings, n_articles=len(texts),
+        )
+        if self._mf_means is not None and self._mf_std is not None:
+            current_meet = ((current_meet_raw - self._mf_means) / self._mf_std).reshape(1, -1)
+        else:
+            current_meet = None
 
         result = predict_window(
             texts=texts,
@@ -796,14 +928,16 @@ class CBRNewsPredictor:
             col_means=self._col_means,
             col_std=self._col_std,
             bert_name=BERT_NAME,
-            max_length=MAX_LENGTH,
+            max_length=MAX_LENGTH_STAGE2,
             max_articles=MAX_ARTICLES,
             pipeline=self._sklearn_pipeline,
             daily_model=self._model,
             daily_tokenizer=self._tokenizer,
             daily_n_tab=self._n_tab,
             daily_device=self._device,
-            use_soft_feats=True,
+            use_soft_feats=False,
+            pca=self._pca,
+            meet_feats=current_meet,
         )
 
         probs = result["probs"]
@@ -917,7 +1051,6 @@ def main():
         )
         true_label = None
 
-    # ── Optional: load daily model ─────────────────────────────────────────
     daily_model     = None
     daily_tokenizer = None
     daily_n_tab     = 90

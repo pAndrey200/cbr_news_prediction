@@ -157,6 +157,9 @@ def load_series_from_db() -> dict:
 
 def _make_daily(ts: pd.Series, min_date: pd.Timestamp, max_date: pd.Timestamp) -> pd.Series:
     """Reindex ts to a full calendar-day range and forward-fill gaps."""
+    if ts.empty or ts.index.min() is pd.NaT:
+        date_range = pd.date_range(start=min_date, end=max_date + pd.Timedelta(days=1), freq="D")
+        return pd.Series(np.nan, index=date_range)
     date_range = pd.date_range(
         start=min(ts.index.min(), min_date),
         end=max(ts.index.max(), max_date) + pd.Timedelta(days=1),
