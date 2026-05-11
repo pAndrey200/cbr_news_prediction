@@ -15,3 +15,7 @@ multirun
 htmlcov
 *.ckpt
 !checkpoints/
+sweep_results/
+to_delete/
+text/
+catboost_info/

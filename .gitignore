@@ -49,9 +49,7 @@ ehthumbs.db
 Thumbs.db
 
 # Project specific
-data/
 outputs/
-checkpoints/
 mlruns/
 *.pth
 *.pt
@@ -60,6 +58,21 @@ mlruns/
 *.joblib
 logs/
 *.log
+catboost_info/
+to_delete/
+sweep_results/
+
+# Data (большие файлы, не версионируются)
+data/
+
+# Checkpoints — всё кроме production
+checkpoints/
+!checkpoints/sweep/
+!checkpoints/sweep/run_002/
+!checkpoints/sweep/run_002/*.ckpt
+
+# LaTeX build artifacts
+text/
 
 # DVC
 .dvc/tmp

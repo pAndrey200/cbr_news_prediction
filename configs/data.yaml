@@ -15,8 +15,8 @@ data:
       url: "s3://potseluevam/"
       region_name: "ru-central1"
       endpoint_url: "https://storage.yandexcloud.net/"
-  max_length: 256  # Было: 512 → короткие последовательности меньше переобучаются
-  batch_size: 32   # Было: 16 → больше батч = стабильнее градиенты
+  max_length: 256
+  batch_size: 32
   test_size: 0.2
   val_size: 0.1
   prediction_horizon: 2
